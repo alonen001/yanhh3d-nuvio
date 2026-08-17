@@ -1,11 +1,11 @@
 {
   "version": 2,
   "functions": {
-    "api/index.js": {
-      "maxDuration": 30
-    }
+    "api/index.js": { "maxDuration": 30 },
+    "api/proxy.js": { "maxDuration": 30 }
   },
   "rewrites": [
+    { "source": "/proxy", "destination": "/api/proxy.js" },
     { "source": "/(.*)", "destination": "/api/index.js" }
   ]
 }
