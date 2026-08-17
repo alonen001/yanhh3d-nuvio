@@ -1,0 +1,24 @@
+{
+  "id": "community.yanhh3d",
+  "version": "1.0.1",
+  "name": "YanHH3D",
+  "description": "YanHH3D Vietnamese animation catalog and streams",
+  "logo": "https://yanhh3d.pw/favicon.ico",
+  "resources": [
+    "catalog",
+    { "name": "meta", "types": ["series"], "idPrefixes": ["yanhh3d:"] },
+    { "name": "stream", "types": ["series"], "idPrefixes": ["yanhh3d:"] }
+  ],
+  "types": ["series"],
+  "catalogs": [
+    {
+      "type": "series",
+      "id": "yanhh3d",
+      "name": "YanHH3D",
+      "extra": [
+        { "name": "search", "isRequired": false },
+        { "name": "skip", "isRequired": false }
+      ]
+    }
+  ]
+}
