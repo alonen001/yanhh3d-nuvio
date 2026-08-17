@@ -64,7 +64,7 @@ async function get(url) {
 }
 
 function attr(tag, name) {
-  const re = new RegExp(name + '\\s*=\\s*["\\']([^"\\']+)', 'i');
+  const re = new RegExp(name + "\\s*=\\s*[\"']([^\"']+)[\"']", "i");
   const m = String(tag).match(re);
   return m ? decode(m[1]) : null;
 }
