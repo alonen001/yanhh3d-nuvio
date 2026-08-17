@@ -1,18 +1,25 @@
-[
-  {
-    "id": "yanhh3d",
-    "name": "YanHH3D",
-    "description": "YanHH3D Vietnamese animation streams",
-    "version": "2.0.0",
-    "author": "alonen001",
-    "supportedTypes": ["tv"],
-    "filename": "providers/yanhh3d.js",
-    "enabled": true,
-    "logo": "https://yanhh3d.pw/favicon.ico",
-    "contentLanguage": ["vi"],
-    "formats": ["m3u8", "mp4"],
-    "limited": false,
-    "disabledPlatforms": [],
-    "supportsExternalPlayer": true
-  }
-]
+{
+  "id": "community.yanhh3d",
+  "version": "1.1.0",
+  "name": "YanHH3D",
+  "description": "YanHH3D Vietnamese animation catalog and streams",
+  "logo": "https://yanhh3d.pw/favicon.ico",
+  "resources": [
+    "catalog",
+    { "name": "meta", "types": ["series"], "idPrefixes": ["yanhh3d:"] },
+    { "name": "stream", "types": ["series"], "idPrefixes": ["yanhh3d:"] }
+  ],
+  "types": ["series"],
+  "catalogs": [
+    {
+      "type": "series",
+      "id": "yanhh3d",
+      "name": "YanHH3D",
+      "extra": [
+        { "name": "search", "isRequired": false },
+        { "name": "skip", "isRequired": false }
+      ]
+    }
+  ],
+  "behaviorHints": { "configurable": false }
+}
