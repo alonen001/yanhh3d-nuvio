@@ -3,13 +3,13 @@ const express = require('express');
 const { getRouter } = require('stremio-addon-sdk');
 const addonInterface = require('./addon');
 const proxyHandler = require('./api/proxy');
-const cbplayHandler = require('./api/cbplay');
+const legacyHandler = require('./api/legacy');
 
 const app = express();
 
 app.use('/api/proxy', proxyHandler);
 app.use('/proxy', proxyHandler);
-app.use('/api/cbplay', cbplayHandler);
+app.use('/api/legacy', legacyHandler);
 app.use(getRouter(addonInterface));
 
 if (require.main === module) {
