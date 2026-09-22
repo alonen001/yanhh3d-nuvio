@@ -1,7 +1,20 @@
 #!/usr/bin/env node
-const { serveHTTP } = require('stremio-addon-sdk');
+const express = require('express');
+const { getRouter } = require('stremio-addon-sdk');
 const addonInterface = require('./addon');
+const proxyHandler = require('./api/proxy');
 
-const port = Number(process.env.PORT || 7000);
-serveHTTP(addonInterface, { port, cacheMaxAge: 60 });
-console.log('YanHH3D Stremio addon listening on port ' + port);
+const app = express();
+
+app.use('/api/proxy', proxyHandler);
+app.use('/proxy', proxyHandler);
+app.use(getRouter(addonInterface));
+
+if (require.main === module) {
+  const port = Number(process.env.PORT || 7000);
+  app.listen(port, () => {
+    console.log('YanHH3D Stremio addon listening on port ' + port);
+  });
+}
+
+module.exports = app;
