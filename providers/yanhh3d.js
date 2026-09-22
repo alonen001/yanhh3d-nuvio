@@ -2,7 +2,7 @@
  * Runs inside Nuvio/Hermes. Promise-based only.
  */
 
-const BASE = 'https://yanhh3d.pw';
+const BASE = 'https://yanhh3d.ee';
 const UA = 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 
 function clean(s) {
@@ -109,7 +109,7 @@ function searchYan(title) {
 
     var out = [];
     anchors(body).forEach(function (a) {
-      if (!/yanhh3d\.pw/i.test(a.url)) return;
+      if (!/yanhh3d\.ee/i.test(a.url)) return;
       if (/\/(?:sever|server)\d+\//i.test(a.url) || /\/xem\//i.test(a.url)) return;
       if (!a.text || a.text.length < 2) return;
       if (!out.some(function (x) { return x.url === a.url; })) out.push(a);
