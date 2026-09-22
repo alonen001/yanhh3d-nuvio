@@ -6,7 +6,7 @@ const UA='Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131 Mobile S
 
 module.exports = async (req, res) => {
   const incoming=new URL(req.url||'/',ADDON_ORIGIN);
-  const originalPath=incoming.searchParams.get('path');
+  const originalPath=(req.query&&req.query.path)||incoming.searchParams.get('path');
   if(originalPath){
     incoming.searchParams.delete('path');
     const query=incoming.searchParams.toString();
