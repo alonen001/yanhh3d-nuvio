@@ -1,6 +1,6 @@
 const { Readable } = require('stream');
 
-const ALLOWED_HOSTS = ['yanhh3d.pw','fbcdn.cloud','odycdn.com','player.odycdn.com'];
+const ALLOWED_HOSTS = ['yanhh3d.ee','yanhh3d.pw','fbcdn.cloud','odycdn.com','player.odycdn.com'];
 const UA='Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 
 function allowed(url){
@@ -13,7 +13,7 @@ function allowed(url){
 }
 
 function proxyUrl(url,ref){
-  return '/api/proxy?url='+encodeURIComponent(url)+'&ref='+encodeURIComponent(ref||'https://yanhh3d.pw/');
+  return '/api/proxy?url='+encodeURIComponent(url)+'&ref='+encodeURIComponent(ref||'https://yanhh3d.ee/');
 }
 
 function copy(res,headers,names){
@@ -26,11 +26,11 @@ module.exports=async(req,res)=>{
     const target=String(q.url||q.u||'');
     if(!target||!allowed(target)) return res.status(400).send('Bad stream URL');
 
-    const referer=String(q.ref||'https://yanhh3d.pw/');
+    const referer=String(q.ref||'https://yanhh3d.ee/');
     const headers={
       'User-Agent':UA,
       'Referer':referer,
-      'Origin':'https://yanhh3d.pw',
+      'Origin':'https://yanhh3d.ee',
       'Accept':'*/*',
       'Accept-Encoding':'identity'
     };
