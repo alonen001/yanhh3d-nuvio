@@ -5,7 +5,7 @@
     "api/proxy.js": { "maxDuration": 30 }
   },
   "rewrites": [
-    { "source": "/proxy", "destination": "/api/proxy.js" },
-    { "source": "/(.*)", "destination": "/api/index.js" }
+    { "source": "/proxy", "destination": "/api/proxy" },
+    { "source": "/(.*)", "destination": "/api/index" }
   ]
 }
