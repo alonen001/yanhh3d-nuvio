@@ -1,6 +1,6 @@
 # YanHH3D Stremio Addon
 
-Stremio-compatible addon for `https://yanhh3d.pw/`.
+Stremio-compatible addon for `https://yanhh3d.ee/`.
 
 ## Features
 
