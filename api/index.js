@@ -5,6 +5,13 @@ const ADDON_ORIGIN='https://yanhh3d-nuvio-lovat.vercel.app';
 const UA='Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 
 module.exports = async (req, res) => {
+  const incoming=new URL(req.url||'/',ADDON_ORIGIN);
+  const originalPath=incoming.searchParams.get('path');
+  if(originalPath){
+    incoming.searchParams.delete('path');
+    const query=incoming.searchParams.toString();
+    req.url=originalPath+(query?'?'+query:'');
+  }
   const path=req.url||'';
   if(!path.startsWith('/api/proxy')) return router(req,res);
   try{
