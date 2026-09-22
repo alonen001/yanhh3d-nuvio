@@ -18,7 +18,7 @@ Recommended quick deployment: import this repository into Vercel. The serverless
 
 After deployment, the Stremio manifest URL is:
 
-`https://YOUR-VERCEL-DOMAIN/manifest.json`
+`https://yanhh3d-nuvio-lovat.vercel.app/manifest.json`
 
 Then in Nuvio/Stremio: Addons -> Add Addon -> paste that manifest URL.
 
