@@ -10,7 +10,7 @@ module.exports = async (req, res) => {
   try{
     const parsed=new URL(path,ADDON_ORIGIN);
     const target=parsed.searchParams.get('url');
-    const referer=parsed.searchParams.get('ref')||'https://yanhh3d.pw/';
+    const referer=parsed.searchParams.get('ref')||'https://yanhh3d.ee/';
     if(!target) return res.status(400).send('Missing url');
     const u=new URL(target);
     if(!/^https?:$/i.test(u.protocol)) return res.status(400).send('Invalid protocol');
