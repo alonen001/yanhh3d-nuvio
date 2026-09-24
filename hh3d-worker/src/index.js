@@ -3,6 +3,7 @@ const FALLBACK_ORIGIN = 'https://hoathinh3d.de';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
+const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
 
 let originCache = { value: FALLBACK_ORIGIN, expiresAt: 0 };
 
@@ -204,16 +205,60 @@ function allowedPlaylistUrl(value) {
   }
 }
 
-function absolutizePlaylist(text, playlistUrl) {
+function playableMediaUrl(value, playlistUrl, resolverOrigin) {
+  const absolute = new URL(value, playlistUrl);
+  if (resolverOrigin && PROXIED_SEGMENT_HOSTS.has(absolute.hostname)) {
+    return `${resolverOrigin}/segment?url=${encodeURIComponent(absolute.href)}`;
+  }
+  return absolute.href;
+}
+
+function absolutizePlaylist(text, playlistUrl, resolverOrigin = '') {
   return String(text).split(/\r?\n/).map(line => {
     if (!line || line.startsWith('#')) {
-      return line.replace(/URI="([^"]+)"/g, (_, value) => `URI="${new URL(value, playlistUrl).href}"`);
+      return line.replace(/URI="([^"]+)"/g, (_, value) => `URI="${playableMediaUrl(value, playlistUrl, resolverOrigin)}"`);
     }
-    return new URL(line, playlistUrl).href;
+    return playableMediaUrl(line, playlistUrl, resolverOrigin);
   }).join('\n');
 }
 
-export async function resolvePlaylist(slugValue, episodeValue) {
+function validateSegmentUrl(value) {
+  const url = new URL(String(value || ''));
+  if (url.protocol !== 'https:' || !PROXIED_SEGMENT_HOSTS.has(url.hostname)) {
+    throw new Error('Segment host is not allowed');
+  }
+  if (!/^\/f2_[a-z0-9]+_\d+\/\d+\.png$/i.test(url.pathname)) {
+    throw new Error('Invalid segment path');
+  }
+  return url;
+}
+
+async function proxySegment(request, origin) {
+  const target = validateSegmentUrl(new URL(request.url).searchParams.get('url'));
+  const headers = {
+    'User-Agent': UA,
+    Referer: `${origin}/`,
+    Accept: '*/*',
+  };
+  const range = request.headers.get('range');
+  if (range) headers.Range = range;
+  const response = await timedFetch(target, { headers });
+  const contentType = response.headers.get('content-type') || '';
+  if (!response.ok || /text\/html/i.test(contentType)) {
+    throw new Error(`HH3D segment HTTP ${response.status}`);
+  }
+  const responseHeaders = corsHeaders({
+    'Content-Type': 'video/mp2t',
+    'Cache-Control': 'public, max-age=86400',
+  });
+  const contentLength = response.headers.get('content-length');
+  const contentRange = response.headers.get('content-range');
+  if (contentLength) responseHeaders['Content-Length'] = contentLength;
+  if (contentRange) responseHeaders['Content-Range'] = contentRange;
+  return new Response(response.body, { status: response.status, headers: responseHeaders });
+}
+
+export async function resolvePlaylist(slugValue, episodeValue, resolverOrigin = '') {
   const slug = validateSlug(slugValue);
   const episode = validateEpisode(episodeValue);
   let lastError;
@@ -229,7 +274,7 @@ export async function resolvePlaylist(slugValue, episodeValue) {
         headers: { 'User-Agent': UA, Referer: `${origin}/`, Accept: '*/*' },
       });
       if (!playlistResponse.ok) throw new Error(`HH3D playlist HTTP ${playlistResponse.status}`);
-      const playlist = absolutizePlaylist(await playlistResponse.text(), player.file);
+      const playlist = absolutizePlaylist(await playlistResponse.text(), player.file, resolverOrigin);
       if (!playlist.trimStart().startsWith('#EXTM3U')) throw new Error('Dữ liệu nhận được không phải HLS');
       return { playlist, origin, label: player.label || '1080', skipTime: player.skip_time || 0 };
     } catch (error) {
@@ -249,11 +294,21 @@ export default {
         'Cache-Control': 'no-store',
       });
     }
+    if (url.pathname === '/segment' && request.method === 'GET') {
+      try {
+        return await proxySegment(request, await discoverOrigin());
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, /not allowed|Invalid/i.test(message) ? 400 : 502, {
+          'Cache-Control': 'no-store',
+        });
+      }
+    }
     if (url.pathname !== '/resolve' || request.method !== 'GET') {
       return json({ error: 'Not found' }, 404);
     }
     try {
-      const result = await resolvePlaylist(url.searchParams.get('slug'), url.searchParams.get('ep'));
+      const result = await resolvePlaylist(url.searchParams.get('slug'), url.searchParams.get('ep'), url.origin);
       return new Response(result.playlist, {
         status: 200,
         headers: corsHeaders({
