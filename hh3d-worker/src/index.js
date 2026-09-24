@@ -5,7 +5,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
 
-let originCache = { value: FALLBACK_ORIGIN, expiresAt: 0 };
+let originCache = { value: FALLBACK_ORIGIN, expiresAt: Date.now() + 10 * 60 * 1000 };
 
 function corsHeaders(extra = {}) {
   return {
@@ -41,6 +41,111 @@ function siteHeaders(origin, extra = {}) {
     'Cache-Control': 'no-cache',
     ...extra,
   };
+}
+
+function decodeHtml(value) {
+  return String(value || '').replace(/&amp;/g, '&').replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+}
+
+function cleanHtml(value) {
+  return decodeHtml(String(value || '').replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+function attribute(tag, name) {
+  const match = String(tag || '').match(new RegExp(`${name}\\s*=\\s*["']([^"']+)["']`, 'i'));
+  return match ? decodeHtml(match[1]) : null;
+}
+
+function absoluteUrl(value, origin) {
+  if (!value) return null;
+  try { return new URL(decodeHtml(value), origin).href; } catch (_) { return null; }
+}
+
+async function fetchSitePath(path, timeout = REQUEST_TIMEOUT_MS) {
+  let lastError;
+  for (const force of [false, true]) {
+    const origin = await discoverOrigin(force);
+    try {
+      const response = await timedFetch(new URL(path, origin), { headers: siteHeaders(origin) }, timeout);
+      if (!response.ok) throw new Error(`HH3D page HTTP ${response.status}`);
+      const html = await response.text();
+      if (!/(?:halim-item|halim-episode|info-hero)/i.test(html)) throw new Error('HH3D page không hợp lệ');
+      const finalOrigin = new URL(response.url).origin;
+      originCache = { value: finalOrigin, expiresAt: Date.now() + ORIGIN_TTL_MS };
+      return { html, origin: finalOrigin };
+    } catch (error) {
+      lastError = error;
+      originCache.expiresAt = 0;
+    }
+  }
+  throw lastError || new Error('Không tải được trang HH3D');
+}
+
+function parseCatalogCards(html, origin) {
+  const items = [], seen = new Set();
+  for (const match of String(html || '').matchAll(/<article\b[^>]*>[\s\S]*?<\/article>/gi)) {
+    const anchor = match[0].match(/<a\b(?=[^>]*class=["'][^"']*\bhalim-thumb\b)[^>]*>/i);
+    const image = match[0].match(/<img\b[^>]*>/i);
+    if (!anchor) continue;
+    const url = absoluteUrl(attribute(anchor[0], 'href'), origin);
+    let slug = '';
+    try {
+      const parts = new URL(url).pathname.split('/').filter(Boolean);
+      if (parts.length === 1 && !/^(?:page|category|tag|search)$/i.test(parts[0])) slug = parts[0];
+    } catch (_) {}
+    if (!slug || seen.has(slug)) continue;
+    const title = cleanHtml(attribute(anchor[0], 'title') || attribute(image?.[0], 'alt'));
+    if (!title) continue;
+    const poster = absoluteUrl(attribute(image?.[0], 'data-src') || attribute(image?.[0], 'data-original')
+      || attribute(image?.[0], 'data-lazy-src') || attribute(image?.[0], 'src'), origin);
+    seen.add(slug);
+    items.push({ slug, title, poster });
+  }
+  return items;
+}
+
+async function catalogData(search, skip) {
+  const page = Math.floor(Math.max(0, skip) / 40) + 1;
+  const paths = search ? [`/?s=${encodeURIComponent(search)}`]
+    : [page === 1 ? '/' : `/page/${page}/`, `/page/${page + 1}/`];
+  const results = await Promise.allSettled(paths.map(path => fetchSitePath(path, 25_000)));
+  const items = [], seen = new Set();
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue;
+    for (const item of parseCatalogCards(result.value.html, result.value.origin)) {
+      if (seen.has(item.slug)) continue;
+      seen.add(item.slug);
+      items.push(item);
+    }
+  }
+  if (!items.length && results.every(result => result.status === 'rejected')) {
+    throw results.find(result => result.status === 'rejected')?.reason || new Error('Không tải được danh mục HH3D');
+  }
+  return items;
+}
+
+function metaDescription(html) {
+  for (const pattern of [/<meta\b[^>]*name=["']description["'][^>]*>/i, /<meta\b[^>]*property=["']og:description["'][^>]*>/i]) {
+    const value = cleanHtml(attribute(String(html || '').match(pattern)?.[0], 'content'));
+    if (value) return value;
+  }
+  return 'HH3D • Hoạt hình 3D';
+}
+
+async function metaData(slugValue) {
+  const slug = validateSlug(slugValue);
+  const { html, origin } = await fetchSitePath(`/${slug}/`, 30_000);
+  const titleTag = html.match(/<h1\b[^>]*class=["'][^"']*\binfo-hero__title\b[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i);
+  const posterBlock = html.match(/<div\b[^>]*class=["'][^"']*\binfo-hero__poster\b[^"']*["'][^>]*>[\s\S]*?<\/div>/i)?.[0];
+  const image = posterBlock?.match(/<img\b[^>]*>/i)?.[0];
+  const poster = absoluteUrl(attribute(image, 'data-accent-src') || attribute(image, 'src'), origin);
+  const episodes = new Set();
+  for (const match of html.matchAll(/\/tap-(\d+)(?:-sv\d+)?\.html/gi)) episodes.add(Number(match[1]));
+  for (const match of html.matchAll(/data-episode-slug=["']tap-(\d+)["']/gi)) episodes.add(Number(match[1]));
+  return { slug, title: cleanHtml(titleTag?.[1]) || slug.replace(/-/g, ' '), poster,
+    description: metaDescription(html), episodes: [...episodes].filter(Boolean).sort((a, b) => a - b) };
 }
 
 async function discoverOrigin(force = false) {
@@ -301,6 +406,28 @@ export default {
       return json({ ok: true, service: 'hh3d-stream-resolver', origin: await discoverOrigin() }, 200, {
         'Cache-Control': 'no-store',
       });
+    }
+    if (url.pathname === '/catalog' && request.method === 'GET') {
+      try {
+        const search = String(url.searchParams.get('search') || '').trim().slice(0, 120);
+        const skip = Math.max(0, Number.parseInt(url.searchParams.get('skip') || '0', 10) || 0);
+        return json({ items: await catalogData(search, skip) }, 200, {
+          'Cache-Control': search ? 'public, max-age=900' : 'public, max-age=3600',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message, items: [] }, 502, { 'Cache-Control': 'no-store' });
+      }
+    }
+    if (url.pathname === '/meta' && request.method === 'GET') {
+      try {
+        return json(await metaData(url.searchParams.get('slug')), 200, {
+          'Cache-Control': 'public, max-age=3600',
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, /Invalid/.test(message) ? 400 : 502, { 'Cache-Control': 'no-store' });
+      }
     }
     if (request.method === 'HEAD' && url.pathname === '/resolve') {
       try {
