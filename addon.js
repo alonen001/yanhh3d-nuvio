@@ -33,7 +33,7 @@ async function get(url,ref=ACTIVE_YAN_BASE+'/',timeout=TIMEOUT){return(await fet
 function uniqueOrigins(values){const out=[];for(const value of values){try{const origin=new URL(value).origin;if(/^https?:\/\//i.test(origin)&&!out.includes(origin))out.push(origin)}catch(_){}}return out}
 function isYanPage(h){return /YanHH3D/i.test(h)&&/(?:moi-cap-nhat|film-poster|Hoạt Hình Trung Quốc)/i.test(h)}
 function isAnimePage(h){return /AnimeHay/i.test(h)&&/(?:thong-tin-phim|the-loai\/anime|Mới cập nhật)/i.test(h)}
-function isHh3dPage(h){return /(?:HoatHinh3D|HH3D|Hoạt Hình Trung Quốc|halim_list_item)/i.test(h)&&/(?:halim-thumb|halim_cfg|halim-list-server|halim_list_item)/i.test(h)}
+function isHh3dPage(h){return /(?:HoatHinh3D|HH3D|Hoạt Hình Trung Quốc|halim_list_item)/i.test(h)&&/(?:halim-thumb|halim_cfg|halim-list-server|halim_list_item|postid-\d+)/i.test(h)}
 async function yanRoots(force=false){
   if(!force&&yanDomainCache&&Date.now()-yanDomainCache.time<DOMAIN_CACHE_MS)return yanDomainCache.roots;
   if(yanDiscoveryPromise)return yanDiscoveryPromise;
@@ -126,7 +126,7 @@ async function hh3dPlayer(postId,ep,ref){
     const data=JSON.parse(Buffer.concat([decipher.update(payload.subarray(0,-16)),decipher.final()]).toString('utf8'));if(!data.status||data.type!=='hls'||!/^https:\/\//i.test(data.file||''))throw Error(data.message||'HH3D HLS unavailable');return data;
   }finally{clearTimeout(timer)}
 }
-async function resolveHh3dStream(path,ep){const page=await hh3dGet(path),postId=(page.match(/\bpostid-(\d+)/i)||page.match(/\bdata-post-id=["'](\d+)/i)||[])[1],hasEpisode=page.includes('data-episode-slug="tap-'+ep+'"')||new RegExp('/tap-'+ep+'-sv\\d+\\.html','i').test(page),ref=new URL(path,ACTIVE_HH3D_BASE).href;if(!postId||!hasEpisode)throw Error('HH3D episode unavailable');return hh3dPlayer(postId,ep,ref)}
+async function resolveHh3dStream(path,ep){const cleanPath=String(path).replace(/\/$/,'').replace(/\/embed$/i,''),page=await hh3dGet(cleanPath+'/embed'),postId=(page.match(/\bpostid-(\d+)/i)||page.match(/\bpost-(\d+)/i)||[])[1],ref=new URL(cleanPath,ACTIVE_HH3D_BASE).href;if(!postId)throw Error('HH3D post unavailable');return hh3dPlayer(postId,ep,ref)}
 async function resolveHh3dBySlug(slug,ep){try{return await resolveHh3dStream('/'+slug,ep)}catch(directError){const match=await findHh3dMatch('hh3d:'+slug,slug.replace(/-/g,' '));if(!match)throw directError;return resolveHh3dStream(new URL(match.url).pathname,ep)}}
 async function hh3dAlternates(metaId,ep){const slug=detailUrl(metaId).split('/').filter(Boolean).at(-1);if(!/^[a-z0-9-]+$/i.test(slug||''))return[];return[{name:'HH3D Direct',title:'HH3D • 1080 • Vietsub',url:ADDON+'/api/hh3d?slug='+encodeURIComponent(slug)+'&ep='+encodeURIComponent(ep),quality:'1080p',behaviorHints:{notWebReady:true}}]}
 async function vsmovPage(c,page){const url=VSMOV_BASE+'/api/quoc-gia/'+c.country+'?limit=50&page='+page+'&type='+c.sourceType;const data=JSON.parse(await get(url,VSMOV_BASE+'/',45000));return Array.isArray(data.items)?data.items:[]}
