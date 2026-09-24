@@ -25,6 +25,6 @@ module.exports=async(req,res)=>{
     return res.status(200).send(playlist);
   }catch(e){
     console.error('[hh3d]',e.stack||e.message);
-    return res.status(502).send('HH3D stream error');
+    return res.status(502).send('HH3D stream error: '+String(e.message||'unknown').slice(0,180));
   }
 };
