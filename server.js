@@ -16,9 +16,11 @@ app.get(/^\/catalog\/series\/hh3d-recent(?:\/(.*?))?\.json$/, (req, res) => {
   const query = new URLSearchParams();
   if (params.get('search')) query.set('search', params.get('search'));
   if (params.get('skip')) query.set('skip', params.get('skip'));
+  res.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
   res.redirect(307, HH3D_RESOLVER + '/catalog' + (query.size ? '?' + query : ''));
 });
-app.get(/^\/meta\/series\/hh3d:([^/]+)\.json$/, (req, res) => {
+app.get(/^\/meta\/series\/hh3d(?::|%3a)([^/]+)\.json$/i, (req, res) => {
+  res.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
   res.redirect(307, HH3D_RESOLVER + '/meta?slug=' + encodeURIComponent(req.params[0]));
 });
 app.use(getRouter(addonInterface));
