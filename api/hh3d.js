@@ -13,7 +13,7 @@ module.exports=async(req,res)=>{
   try{
     const slug=String(req.query?.slug||''),ep=String(req.query?.ep||'');
     if(!/^[a-z0-9-]+$/i.test(slug)||!/^\d+$/.test(ep))return res.status(400).send('Bad HH3D request');
-    const data=await addonInterface.resolveHh3dStream('/'+slug,ep);
+    const data=await addonInterface.resolveHh3dBySlug(slug,ep);
     if(!allowedPlaylist(data.file))throw Error('Unexpected HH3D playlist host');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),30000);
     let upstream;
