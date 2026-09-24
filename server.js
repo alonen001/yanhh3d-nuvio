@@ -4,14 +4,12 @@ const { getRouter } = require('stremio-addon-sdk');
 const addonInterface = require('./addon');
 const proxyHandler = require('./api/proxy');
 const legacyHandler = require('./api/legacy');
-const hh3dHandler = require('./api/hh3d');
 
 const app = express();
 
 app.use('/api/proxy', proxyHandler);
 app.use('/proxy', proxyHandler);
 app.use('/api/legacy', legacyHandler);
-app.use('/api/hh3d', hh3dHandler);
 app.use(getRouter(addonInterface));
 
 if (require.main === module) {
