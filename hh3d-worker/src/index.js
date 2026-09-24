@@ -23,6 +23,16 @@ function json(body, status = 200, headers = {}) {
   });
 }
 
+async function cachedResponse(request) {
+  if (typeof caches === 'undefined') return null;
+  return caches.default.match(request);
+}
+
+async function storeResponse(request, response) {
+  if (typeof caches !== 'undefined') await caches.default.put(request, response.clone());
+  return response;
+}
+
 async function timedFetch(url, init = {}, timeout = REQUEST_TIMEOUT_MS) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort('timeout'), timeout);
@@ -409,14 +419,16 @@ export default {
     }
     if (url.pathname === '/catalog' && request.method === 'GET') {
       try {
+        const cached = await cachedResponse(request);
+        if (cached) return cached;
         const search = String(url.searchParams.get('search') || '').trim().slice(0, 120);
         const skip = Math.max(0, Number.parseInt(url.searchParams.get('skip') || '0', 10) || 0);
         const items = await catalogData(search, skip);
         const metas = items.map(item => ({ id: `hh3d:${item.slug}`, type: 'series', name: item.title,
           poster: item.poster || undefined, posterShape: 'poster' }));
-        return json({ items, metas, cacheMaxAge: 3600 }, 200, {
+        return storeResponse(request, json({ items, metas, cacheMaxAge: 3600 }, 200, {
           'Cache-Control': search ? 'public, max-age=900' : 'public, max-age=3600',
-        });
+        }));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return json({ error: message, items: [] }, 502, { 'Cache-Control': 'no-store' });
@@ -424,14 +436,16 @@ export default {
     }
     if (url.pathname === '/meta' && request.method === 'GET') {
       try {
+        const cached = await cachedResponse(request);
+        if (cached) return cached;
         const data = await metaData(url.searchParams.get('slug'));
         const id = `hh3d:${data.slug}`;
         const videos = data.episodes.map(episode => ({ id: `${id}:1:${episode}`, title: `Tập ${episode}`,
           season: Math.floor((episode - 1) / 50) + 1, episode: (episode - 1) % 50 + 1 }));
-        return json({ ...data, meta: { id, type: 'series', name: data.title, poster: data.poster || undefined,
+        return storeResponse(request, json({ ...data, meta: { id, type: 'series', name: data.title, poster: data.poster || undefined,
           background: data.poster || undefined, description: data.description, videos } }, 200, {
           'Cache-Control': 'public, max-age=3600',
-        });
+        }));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return json({ error: message }, /Invalid/.test(message) ? 400 : 502, { 'Cache-Control': 'no-store' });
