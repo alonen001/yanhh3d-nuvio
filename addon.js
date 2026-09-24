@@ -1,3 +1,4 @@
+const { addonBuilder } = require('stremio-addon-sdk');
 const crypto = require('crypto');
 const BASE='https://yanhh3d.men', ADDON='https://yanhh3d-nuvio-lovat.vercel.app';
 const ANIME_BASE='https://animehay13.site', ANIME_BACKUP='https://animehay14.site';
