@@ -10,7 +10,7 @@ let originCache = { value: FALLBACK_ORIGIN, expiresAt: 0 };
 function corsHeaders(extra = {}) {
   return {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Range',
     ...extra,
   };
@@ -301,6 +301,35 @@ export default {
       return json({ ok: true, service: 'hh3d-stream-resolver', origin: await discoverOrigin() }, 200, {
         'Cache-Control': 'no-store',
       });
+    }
+    if (request.method === 'HEAD' && url.pathname === '/resolve') {
+      try {
+        validateSlug(url.searchParams.get('slug'));
+        validateEpisode(url.searchParams.get('ep'));
+        return new Response(null, {
+          status: 200,
+          headers: corsHeaders({
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Cache-Control': 'no-store',
+          }),
+        });
+      } catch (error) {
+        return new Response(null, { status: 400, headers: corsHeaders({ 'Cache-Control': 'no-store' }) });
+      }
+    }
+    if (request.method === 'HEAD' && url.pathname === '/segment') {
+      try {
+        validateSegmentUrl(url.searchParams.get('url'));
+        return new Response(null, {
+          status: 200,
+          headers: corsHeaders({
+            'Content-Type': 'video/mp2t',
+            'Cache-Control': 'public, max-age=86400',
+          }),
+        });
+      } catch (error) {
+        return new Response(null, { status: 400, headers: corsHeaders({ 'Cache-Control': 'no-store' }) });
+      }
     }
     if (url.pathname === '/segment' && request.method === 'GET') {
       try {
