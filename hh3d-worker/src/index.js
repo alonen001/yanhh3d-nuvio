@@ -411,7 +411,10 @@ export default {
       try {
         const search = String(url.searchParams.get('search') || '').trim().slice(0, 120);
         const skip = Math.max(0, Number.parseInt(url.searchParams.get('skip') || '0', 10) || 0);
-        return json({ items: await catalogData(search, skip) }, 200, {
+        const items = await catalogData(search, skip);
+        const metas = items.map(item => ({ id: `hh3d:${item.slug}`, type: 'series', name: item.title,
+          poster: item.poster || undefined, posterShape: 'poster' }));
+        return json({ items, metas, cacheMaxAge: 3600 }, 200, {
           'Cache-Control': search ? 'public, max-age=900' : 'public, max-age=3600',
         });
       } catch (error) {
@@ -421,7 +424,12 @@ export default {
     }
     if (url.pathname === '/meta' && request.method === 'GET') {
       try {
-        return json(await metaData(url.searchParams.get('slug')), 200, {
+        const data = await metaData(url.searchParams.get('slug'));
+        const id = `hh3d:${data.slug}`;
+        const videos = data.episodes.map(episode => ({ id: `${id}:1:${episode}`, title: `Tập ${episode}`,
+          season: Math.floor((episode - 1) / 50) + 1, episode: (episode - 1) % 50 + 1 }));
+        return json({ ...data, meta: { id, type: 'series', name: data.title, poster: data.poster || undefined,
+          background: data.poster || undefined, description: data.description, videos } }, 200, {
           'Cache-Control': 'public, max-age=3600',
         });
       } catch (error) {

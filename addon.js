@@ -24,7 +24,7 @@ const catalogManifest=[
   ...Object.values(ANIME_CATALOGS).map(c=>({type:'series',id:c.id,name:c.name,extra:[{name:'search',isRequired:false},{name:'skip',isRequired:false}]})),
   ...Object.values(VSMOV_CATALOGS).map(c=>({type:c.type,id:c.id,name:c.name,extra:[{name:'skip',isRequired:false}]}))
 ];
-const manifest={id:'community.yanhhh3d.direct',version:'3.5.1',name:'YanHH3D + Anime + Phim',description:'YanHH3D, AnimeHay, HH3D và danh mục phim theo quốc gia',logo:BASE+'/favicon.ico',resources:['catalog',{name:'meta',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']},{name:'stream',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']}],types:['series','movie'],catalogs:catalogManifest,behaviorHints:{configurable:false}};
+const manifest={id:'community.yanhhh3d.direct',version:'3.5.2',name:'YanHH3D + Anime + Phim',description:'YanHH3D, AnimeHay, HH3D và danh mục phim theo quốc gia',logo:BASE+'/favicon.ico',resources:['catalog',{name:'meta',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']},{name:'stream',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']}],types:['series','movie'],catalogs:catalogManifest,behaviorHints:{configurable:false}};
 const builder=new addonBuilder(manifest);
 function decode(s){return String(s||'').replace(/\\\//g,'/').replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=').replace(/&amp;/g,'&').replace(/&#39;|&apos;/gi,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}
 function clean(s){return decode(String(s||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')).replace(/\s+/g,' ').trim()}
