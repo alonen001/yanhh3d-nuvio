@@ -247,15 +247,23 @@ async function proxySegment(request, origin) {
   if (!response.ok || /text\/html/i.test(contentType)) {
     throw new Error(`HH3D segment HTTP ${response.status}`);
   }
+  const source = new Uint8Array(await response.arrayBuffer());
+  let transportOffset = -1;
+  const scanLimit = Math.min(source.length - 376, 4096);
+  for (let index = 0; index < scanLimit; index += 1) {
+    if (source[index] === 0x47 && source[index + 188] === 0x47 && source[index + 376] === 0x47) {
+      transportOffset = index;
+      break;
+    }
+  }
+  if (transportOffset < 0) throw new Error('HH3D segment is not MPEG-TS');
+  const body = source.slice(transportOffset);
   const responseHeaders = corsHeaders({
     'Content-Type': 'video/mp2t',
     'Cache-Control': 'public, max-age=86400',
+    'Content-Length': String(body.byteLength),
   });
-  const contentLength = response.headers.get('content-length');
-  const contentRange = response.headers.get('content-range');
-  if (contentLength) responseHeaders['Content-Length'] = contentLength;
-  if (contentRange) responseHeaders['Content-Range'] = contentRange;
-  return new Response(response.body, { status: response.status, headers: responseHeaders });
+  return new Response(body, { status: 200, headers: responseHeaders });
 }
 
 export async function resolvePlaylist(slugValue, episodeValue, resolverOrigin = '') {
