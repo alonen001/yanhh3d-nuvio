@@ -1,14 +1,21 @@
 const { addonBuilder } = require('stremio-addon-sdk');
 const BASE='https://yanhh3d.men', ADDON='https://yanhh3d-nuvio-lovat.vercel.app';
 const ANIME_BASE='https://animehay13.site', ANIME_BACKUP='https://animehay14.site';
+const VSMOV_BASE='https://vsmov.com';
 const UA='Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36', TIMEOUT=20000;
 const CATALOGS={recent:{id:'yanhh3d-recent',name:'Mới cập nhật',path:'/moi-cap-nhat'},ongoing:{id:'yanhh3d-ongoing',name:'Phim bộ • Đang chiếu',path:'/dang-chieu'},movies:{id:'yanhh3d-movies',name:'Phim lẻ • OVA',path:'/phim-le'},fourk:{id:'yanhh3d-4k',name:'Phim 4K',path:'/hoat-hinh-4k'},completed:{id:'yanhh3d-completed',name:'Đã hoàn thành',path:'/hoan-thanh'}};
 const ANIME_CATALOGS={latest:{id:'animehay-latest',name:'Anime Nhật • Mới cập nhật',path:'/the-loai/anime-1.html'}};
+const VSMOV_CATALOGS={
+  western:{id:'vsmov-western',name:'Phim Âu Mỹ • Mới cập nhật',country:'au-my',sourceType:'single',type:'movie'},
+  korea:{id:'vsmov-korea',name:'Phim Hàn Quốc',country:'han-quoc',sourceType:'series',type:'series'},
+  china:{id:'vsmov-china',name:'Phim Trung Quốc • Người đóng',country:'trung-quoc',sourceType:'series',type:'series'}
+};
 const catalogManifest=[
   ...Object.values(CATALOGS).map(c=>({type:'series',id:c.id,name:c.name,extra:[{name:'search',isRequired:false},{name:'skip',isRequired:false}]})),
-  ...Object.values(ANIME_CATALOGS).map(c=>({type:'series',id:c.id,name:c.name,extra:[{name:'search',isRequired:false},{name:'skip',isRequired:false}]}))
+  ...Object.values(ANIME_CATALOGS).map(c=>({type:'series',id:c.id,name:c.name,extra:[{name:'search',isRequired:false},{name:'skip',isRequired:false}]})),
+  ...Object.values(VSMOV_CATALOGS).map(c=>({type:c.type,id:c.id,name:c.name,extra:[{name:'skip',isRequired:false}]}))
 ];
-const manifest={id:'community.yanhhh3d.direct',version:'3.0.0',name:'YanHH3D + Anime',description:'YanHH3D và AnimeHay, phát trực tiếp trong ứng dụng',logo:BASE+'/favicon.ico',resources:['catalog',{name:'meta',types:['series'],idPrefixes:['yanhh3d:','animehay:']},{name:'stream',types:['series'],idPrefixes:['yanhh3d:','animehay:']}],types:['series'],catalogs:catalogManifest,behaviorHints:{configurable:false}};
+const manifest={id:'community.yanhhh3d.direct',version:'3.1.0',name:'YanHH3D + Anime + Phim',description:'YanHH3D, AnimeHay và danh mục phim theo quốc gia',logo:BASE+'/favicon.ico',resources:['catalog',{name:'meta',types:['series'],idPrefixes:['yanhh3d:','animehay:']},{name:'stream',types:['series'],idPrefixes:['yanhh3d:','animehay:']}],types:['series','movie'],catalogs:catalogManifest,behaviorHints:{configurable:false}};
 const builder=new addonBuilder(manifest);
 function decode(s){return String(s||'').replace(/\\\//g,'/').replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=').replace(/&amp;/g,'&').replace(/&#39;|&apos;/gi,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}
 function clean(s){return decode(String(s||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')).replace(/\s+/g,' ').trim()}
@@ -38,7 +45,18 @@ function animeKey(url){try{const m=new URL(url).pathname.match(/\/thong-tin-phim
 function animeDetailUrl(id){return ANIME_BASE+'/thong-tin-phim/'+String(id).replace(/^animehay:/,'')+'.html'}
 function animePage(path,page){if(page<=1)return path;return path+'/trang-'+page+'.html?cate_id=1'}
 async function animeItems(path,q,skip=0){if(q)return animeCards(await animeGet('/tim-kiem/?keyword='+encodeURIComponent(q)));const first=Math.floor(skip/40)+1,pages=await Promise.allSettled([first,first+1].map(page=>animeGet(animePage(path,page))));const out=[],seen=new Set();for(const result of pages){if(result.status!=='fulfilled')continue;for(const item of animeCards(result.value)){if(!seen.has(item.key)){seen.add(item.key);out.push(item)}}}return out}
-builder.defineCatalogHandler(async a=>{const c=Object.values(CATALOGS).find(x=>x.id===a.id);if(c){try{const skip=+a.extra?.skip||0,x=await items(c.path,a.extra?.search?.trim(),skip);return{metas:x.slice(0,100).map(v=>({id:'yanhh3d:'+movieKey(v.url),type:'series',name:clean(v.title),poster:v.poster||undefined,posterShape:'poster'}))}}catch(e){console.error('[catalog]',e.message);return{metas:[]}}}const ac=Object.values(ANIME_CATALOGS).find(x=>x.id===a.id);if(!ac)return{metas:[]};try{const x=await animeItems(ac.path,a.extra?.search?.trim(),+a.extra?.skip||0);return{metas:x.slice(0,80).map(v=>({id:'animehay:'+v.key,type:'series',name:v.title,poster:v.poster||undefined,posterShape:'poster'}))}}catch(e){console.error('[anime-catalog]',e.message);return{metas:[]}}});
+async function vsmovPage(c,page){const url=VSMOV_BASE+'/api/quoc-gia/'+c.country+'?limit=50&page='+page+'&type='+c.sourceType;const data=JSON.parse(await get(url,VSMOV_BASE+'/',45000));return Array.isArray(data.items)?data.items:[]}
+function vsmovMeta(item,c){const id=String(item?.imdb?.id||'').trim();if(!/^tt\d+$/.test(id))return null;const actualType=item?.tmdb?.type==='movie'?'movie':'series';if(actualType!==c.type)return null;return{id,type:c.type,name:clean(item.name||item.origin_name),poster:abs(item.poster_url,VSMOV_BASE)||undefined,background:abs(item.thumb_url,VSMOV_BASE)||undefined,posterShape:'poster',releaseInfo:item.year?String(item.year):undefined}}
+async function vsmovItems(c,skip=0){const safeSkip=Math.max(0,Math.min(+skip||0,350)),pageCount=Math.min(8,Math.ceil((safeSkip+50)/50)+1),pages=await Promise.allSettled(Array.from({length:pageCount},(_,i)=>vsmovPage(c,i+1))),out=[],seen=new Set();for(const result of pages){if(result.status!=='fulfilled')continue;for(const item of result.value){const meta=vsmovMeta(item,c);if(meta&&!seen.has(meta.id)){seen.add(meta.id);out.push(meta)}}}return out.slice(safeSkip,safeSkip+50)}
+builder.defineCatalogHandler(async a=>{
+  const c=Object.values(CATALOGS).find(x=>x.id===a.id);
+  if(c){try{const skip=+a.extra?.skip||0,x=await items(c.path,a.extra?.search?.trim(),skip);return{metas:x.slice(0,100).map(v=>({id:'yanhh3d:'+movieKey(v.url),type:'series',name:clean(v.title),poster:v.poster||undefined,posterShape:'poster'}))}}catch(e){console.error('[catalog]',e.message);return{metas:[]}}}
+  const ac=Object.values(ANIME_CATALOGS).find(x=>x.id===a.id);
+  if(ac){try{const x=await animeItems(ac.path,a.extra?.search?.trim(),+a.extra?.skip||0);return{metas:x.slice(0,80).map(v=>({id:'animehay:'+v.key,type:'series',name:v.title,poster:v.poster||undefined,posterShape:'poster'}))}}catch(e){console.error('[anime-catalog]',e.message);return{metas:[]}}}
+  const vc=Object.values(VSMOV_CATALOGS).find(x=>x.id===a.id&&x.type===a.type);
+  if(!vc)return{metas:[]};
+  try{return{metas:await vsmovItems(vc,+a.extra?.skip||0),cacheMaxAge:21600}}catch(e){console.error('[vsmov-catalog]',e.message);return{metas:[],cacheMaxAge:0}}
+});
 builder.defineMetaHandler(async a=>{
   if(String(a.id).startsWith('animehay:')){try{const u=animeDetailUrl(a.id),h=await animeGet(u),titleTag=h.match(/<h1\b[^>]*class=["'][^"']*\baim-hero__title\b[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i),name=clean(titleTag?.[1]||a.id.replace(/^animehay:/,'').replace(/-/g,' ')).replace(/,+$/,'').trim(),descTag=h.match(/<div\b[^>]*id=["']aim-desc-content["'][^>]*>([\s\S]*?)<\/div>/i),poster=animeAbs((h.match(/<meta\b[^>]*property=["']og:image["'][^>]*>/i)||[])[0]&&attr(h.match(/<meta\b[^>]*property=["']og:image["'][^>]*>/i)[0],'content')),eps=[];for(const m of h.matchAll(/<a\b(?=[^>]*class=["'][^"']*\baim-ep-btn\b)[^>]*>/gi)){const url=animeAbs(attr(m[0],'href')),n=+(attr(m[0],'title')||'').match(/(\d+)/)?.[1];if(url&&n)eps.push({episode:n,url})}eps.sort((x,y)=>x.episode-y.episode);const videos=eps.map(x=>({id:a.id+':1:'+x.episode+':'+encodeURIComponent(x.url),title:'Tập '+x.episode,season:Math.floor((x.episode-1)/50)+1,episode:(x.episode-1)%50+1}));return{meta:{id:a.id,type:'series',name,poster:poster||undefined,background:poster||undefined,description:clean(descTag?.[1])||'Anime Nhật Bản • AnimeHay',videos}}}catch(e){console.error('[anime-meta]',e.message);return{meta:null}}}
   if(!String(a.id).startsWith('yanhh3d:'))return{meta:null};
