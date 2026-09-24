@@ -342,7 +342,8 @@ function validateSegmentUrl(value) {
   if (url.protocol !== 'https:' || !PROXIED_SEGMENT_HOSTS.has(url.hostname)) {
     throw new Error('Segment host is not allowed');
   }
-  if (!/^\/f2_[a-z0-9]+_\d+\/\d+\.png$/i.test(url.pathname)) {
+  if (url.pathname.length > 400
+    || !/^\/f2_[a-z0-9_-]{1,160}_\d{1,12}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname)) {
     throw new Error('Invalid segment path');
   }
   return url;
