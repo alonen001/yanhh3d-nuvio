@@ -5,6 +5,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
 const YAN_SEGMENT_HOSTS = new Set(['m.defifa.com']);
+const YAN_TIKTOK_SEGMENT_HOST = /^p\d{1,3}-ad-site-sign-sg\.tiktokcdn\.com$/i;
 
 let originCache = { value: FALLBACK_ORIGIN, expiresAt: Date.now() + 10 * 60 * 1000 };
 
@@ -406,11 +407,19 @@ function validateYanPlaylistUrl(value, playerUrl) {
 
 function validateYanSegmentUrl(value) {
   const url = new URL(String(value || ''));
-  if (url.protocol !== 'https:' || !YAN_SEGMENT_HOSTS.has(url.hostname.toLowerCase())) {
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== 'https:') {
     throw new Error('YanHH3D segment host is not allowed');
   }
-  if (url.pathname.length > 500
-    || !/^\/file\/[a-f0-9-]{36}\/[a-z0-9_-]{1,200}\.png$/i.test(url.pathname)) {
+
+  const isDefifaSegment = YAN_SEGMENT_HOSTS.has(host)
+    && /^\/file\/[a-f0-9-]{36}\/[a-z0-9_-]{1,200}\.png$/i.test(url.pathname);
+  const isTikTokSegment = YAN_TIKTOK_SEGMENT_HOST.test(host)
+    && /^\/ad-site-i18n-sg\/[a-z0-9]+~tplv-d5opwmad15-ttam-origin\.image$/i.test(url.pathname)
+    && /^\d{8,12}$/.test(url.searchParams.get('x-expires') || '')
+    && (url.searchParams.get('x-signature') || '').length >= 20;
+
+  if (url.pathname.length > 500 || (!isDefifaSegment && !isTikTokSegment)) {
     throw new Error('Invalid YanHH3D segment path');
   }
   return url;
