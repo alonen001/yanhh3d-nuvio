@@ -4,6 +4,7 @@ const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
+const YAN_SEGMENT_HOSTS = new Set(['m.defifa.com']);
 
 let originCache = { value: FALLBACK_ORIGIN, expiresAt: Date.now() + 10 * 60 * 1000 };
 
@@ -382,6 +383,88 @@ async function proxySegment(request, origin) {
   return new Response(body, { status: 200, headers: responseHeaders });
 }
 
+function validateYanPlayerUrl(value) {
+  const url = new URL(String(value || ''));
+  const host = url.hostname.toLowerCase();
+  if (url.protocol !== 'https:' || !(host === 'rptcdn.site' || host.endsWith('.rptcdn.site'))) {
+    throw new Error('YanHH3D player host is not allowed');
+  }
+  if (!/^\/o2\/v\/t2\/f2\/m\d{1,6}\/[a-f0-9-]{36}\.m3u8$/i.test(url.pathname)) {
+    throw new Error('Invalid YanHH3D player path');
+  }
+  return url;
+}
+
+function validateYanPlaylistUrl(value, playerUrl) {
+  const url = new URL(String(value || ''));
+  if (url.origin !== playerUrl.origin || url.pathname !== `${playerUrl.pathname}/stream-plain`
+    || !/^[a-f0-9]+\.\d+$/i.test(url.searchParams.get('t') || '')) {
+    throw new Error('Invalid YanHH3D playlist URL');
+  }
+  return url;
+}
+
+function validateYanSegmentUrl(value) {
+  const url = new URL(String(value || ''));
+  if (url.protocol !== 'https:' || !YAN_SEGMENT_HOSTS.has(url.hostname.toLowerCase())) {
+    throw new Error('YanHH3D segment host is not allowed');
+  }
+  if (url.pathname.length > 500
+    || !/^\/file\/[a-f0-9-]{36}\/[a-z0-9_-]{1,200}\.png$/i.test(url.pathname)) {
+    throw new Error('Invalid YanHH3D segment path');
+  }
+  return url;
+}
+
+async function resolveYanPlaylist(value, resolverOrigin) {
+  const playerUrl = validateYanPlayerUrl(value);
+  const playerResponse = await timedFetch(playerUrl, {
+    headers: siteHeaders('https://yanhh3d.men'),
+  });
+  if (!playerResponse.ok) throw new Error(`YanHH3D player HTTP ${playerResponse.status}`);
+  const html = await playerResponse.text();
+  const encoded = html.match(/\bdata-obf=["']([^"']+)["']/i)?.[1];
+  if (!encoded) throw new Error('YanHH3D player data not found');
+  let player;
+  try { player = JSON.parse(atob(encoded)); } catch (_) { throw new Error('YanHH3D player data is invalid'); }
+  const playlistUrl = validateYanPlaylistUrl(player?.pU, playerUrl);
+  const playlistResponse = await timedFetch(playlistUrl, {
+    headers: { 'User-Agent': UA, Referer: playerUrl.href, Origin: playerUrl.origin, Accept: '*/*' },
+  });
+  if (!playlistResponse.ok) throw new Error(`YanHH3D playlist HTTP ${playlistResponse.status}`);
+  const playlist = (await playlistResponse.text()).split(/\r?\n/).map(line => {
+    const value = line.trim();
+    if (!value || value.startsWith('#')) return line;
+    const segment = validateYanSegmentUrl(value);
+    return `${resolverOrigin}/yan/segment?url=${encodeURIComponent(segment.href)}`;
+  }).join('\n');
+  if (!playlist.trimStart().startsWith('#EXTM3U')) throw new Error('YanHH3D playlist is not HLS');
+  return playlist;
+}
+
+async function proxyYanSegment(request) {
+  const target = validateYanSegmentUrl(new URL(request.url).searchParams.get('url'));
+  const headers = { 'User-Agent': UA, Referer: 'https://yanhh3d.men/', Accept: '*/*' };
+  const response = await timedFetch(target, { headers });
+  if (!response.ok) throw new Error(`YanHH3D segment HTTP ${response.status}`);
+  const source = new Uint8Array(await response.arrayBuffer());
+  let transportOffset = -1;
+  const scanLimit = Math.min(source.length - 376, 4096);
+  for (let index = 0; index < scanLimit; index += 1) {
+    if (source[index] === 0x47 && source[index + 188] === 0x47 && source[index + 376] === 0x47) {
+      transportOffset = index;
+      break;
+    }
+  }
+  if (transportOffset < 0) throw new Error('YanHH3D segment is not MPEG-TS');
+  const body = source.slice(transportOffset);
+  return new Response(body, { status: 200, headers: corsHeaders({
+    'Content-Type': 'video/mp2t',
+    'Cache-Control': 'public, max-age=86400',
+    'Content-Length': String(body.byteLength),
+  }) });
+}
+
 export async function resolvePlaylist(slugValue, episodeValue, resolverOrigin = '') {
   const slug = validateSlug(slugValue);
   const episode = validateEpisode(episodeValue);
@@ -484,6 +567,30 @@ export default {
     if (url.pathname === '/segment' && request.method === 'GET') {
       try {
         return await proxySegment(request, await discoverOrigin());
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, /not allowed|Invalid/i.test(message) ? 400 : 502, {
+          'Cache-Control': 'no-store',
+        });
+      }
+    }
+    if (url.pathname === '/yan/resolve' && request.method === 'GET') {
+      try {
+        const playlist = await resolveYanPlaylist(url.searchParams.get('url'), url.origin);
+        return new Response(playlist, { status: 200, headers: corsHeaders({
+          'Content-Type': 'application/vnd.apple.mpegurl',
+          'Cache-Control': 'no-store',
+        }) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, /not allowed|Invalid/i.test(message) ? 400 : 502, {
+          'Cache-Control': 'no-store',
+        });
+      }
+    }
+    if (url.pathname === '/yan/segment' && request.method === 'GET') {
+      try {
+        return await proxyYanSegment(request);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         return json({ error: message }, /not allowed|Invalid/i.test(message) ? 400 : 502, {
