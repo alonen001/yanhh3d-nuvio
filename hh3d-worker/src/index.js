@@ -387,7 +387,8 @@ async function proxySegment(request, origin) {
 function validateYanPlayerUrl(value) {
   const url = new URL(String(value || ''));
   const host = url.hostname.toLowerCase();
-  if (url.protocol !== 'https:' || !(host === 'rptcdn.site' || host.endsWith('.rptcdn.site'))) {
+  if (url.protocol !== 'https:' || !(host === 'rptcdn.site' || host.endsWith('.rptcdn.site')
+    || host === 'streamrpt.xyz' || host.endsWith('.streamrpt.xyz'))) {
     throw new Error('YanHH3D player host is not allowed');
   }
   if (!/^\/o2\/v\/t2\/f2\/m\d{1,6}\/[a-f0-9-]{36}\.m3u8$/i.test(url.pathname)) {
@@ -428,7 +429,7 @@ function validateYanSegmentUrl(value) {
 async function resolveYanPlaylist(value, resolverOrigin) {
   const playerUrl = validateYanPlayerUrl(value);
   const playerResponse = await timedFetch(playerUrl, {
-    headers: siteHeaders('https://yanhh3d.men'),
+    headers: siteHeaders('https://yanhh3d.kim'),
   });
   if (!playerResponse.ok) throw new Error(`YanHH3D player HTTP ${playerResponse.status}`);
   const html = await playerResponse.text();
@@ -453,7 +454,7 @@ async function resolveYanPlaylist(value, resolverOrigin) {
 
 async function proxyYanSegment(request) {
   const target = validateYanSegmentUrl(new URL(request.url).searchParams.get('url'));
-  const headers = { 'User-Agent': UA, Referer: 'https://yanhh3d.men/', Accept: '*/*' };
+  const headers = { 'User-Agent': UA, Referer: 'https://yanhh3d.kim/', Accept: '*/*' };
   const response = await timedFetch(target, { headers });
   if (!response.ok) throw new Error(`YanHH3D segment HTTP ${response.status}`);
   const source = new Uint8Array(await response.arrayBuffer());

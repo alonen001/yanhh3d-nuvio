@@ -5,7 +5,7 @@ function hostAllowed(value,kind){
   try{
     const u=new URL(value),h=u.hostname.toLowerCase();
     if(u.protocol!=='https:')return false;
-    if(kind==='player')return h==='rptcdn.site'||h.endsWith('.rptcdn.site');
+    if(kind==='player')return h==='rptcdn.site'||h.endsWith('.rptcdn.site')||h==='streamrpt.xyz'||h.endsWith('.streamrpt.xyz');
     return h==='m.defifa.com'||h.endsWith('.defifa.com');
   }catch(_){return false}
 }
@@ -55,7 +55,7 @@ module.exports=async(req,res)=>{
     const segment=pathMatch?Buffer.from(pathMatch[1],'base64url').toString('utf8'):String(req.query?.segment||'');
     if(segment){
       if(!hostAllowed(segment,'segment'))return res.status(400).send('Bad segment URL');
-      const r=await fetch(segment,{headers:{'User-Agent':UA,'Referer':'https://yanhh3d.men/','Accept':'*/*'},redirect:'follow'});
+      const r=await fetch(segment,{headers:{'User-Agent':UA,'Referer':'https://yanhh3d.kim/','Accept':'*/*'},redirect:'follow'});
       if(!r.ok&&r.status!==206)return res.status(r.status).send('Segment HTTP '+r.status);
       res.status(200).set({'Content-Type':'video/mp2t','Accept-Ranges':'none','Access-Control-Allow-Origin':'*','Cache-Control':'public, max-age=86400'});
       if(!r.body)return res.end();
@@ -66,7 +66,7 @@ module.exports=async(req,res)=>{
 
     const url=String(req.query?.url||'');
     if(!hostAllowed(url,'player'))return res.status(400).send('Bad player URL');
-    const player=await fetch(url,{headers:{'User-Agent':UA,'Referer':'https://yanhh3d.men/','Cache-Control':'no-cache'},redirect:'follow'});
+    const player=await fetch(url,{headers:{'User-Agent':UA,'Referer':'https://yanhh3d.kim/','Cache-Control':'no-cache'},redirect:'follow'});
     if(!player.ok)return res.status(player.status).send('Player HTTP '+player.status);
     const html=await player.text();
     const match=html.match(/\bdata-obf=["']([^"']+)["']/i);

@@ -1,12 +1,12 @@
 const { addonBuilder } = require('stremio-addon-sdk');
-const BASE='https://yanhh3d.men', ADDON='https://yanhh3d-nuvio-lovat.vercel.app';
+const BASE='https://yanhh3d.kim', ADDON='https://yanhh3d-nuvio-lovat.vercel.app';
 const HH3D_RESOLVER='https://hh3d-stream-resolver.tao2tk.workers.dev';
 const HH3D_BASE='https://hoathinh3d.de', HH3D_DISCOVERY='https://bit.ly/hh3d';
 const ANIME_BASE='https://animehay13.site', ANIME_BACKUP='https://animehay14.site';
 const VSMOV_BASE='https://vsmov.com';
 const YAN_DISCOVERY='https://bit.ly/yanhh3d', ANIME_DISCOVERY=['https://animehay.tv','https://ahay.in'], DOMAIN_CACHE_MS=6*60*60*1000;
 let ACTIVE_YAN_BASE=BASE, ACTIVE_ANIME_BASE=ANIME_BASE, ACTIVE_HH3D_BASE=HH3D_BASE;
-let yanDomainCache={time:Date.now(),roots:[BASE,'https://yanhh3d.pw']}, animeDomainCache={time:Date.now(),roots:[ANIME_BASE,ANIME_BACKUP]};
+let yanDomainCache={time:Date.now(),roots:[BASE,'https://yanhh3d.men','https://yanhh3d.pw']}, animeDomainCache={time:Date.now(),roots:[ANIME_BASE,ANIME_BACKUP]};
 let yanDiscoveryPromise=null, animeDiscoveryPromise=null, hh3dDomainCache={time:0,root:HH3D_BASE}, hh3dDiscoveryPromise=null;
 const animeMatchCache=new Map(), yanTitleCache=new Map();
 const UA='Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36', TIMEOUT=20000;
@@ -24,7 +24,7 @@ const catalogManifest=[
   ...Object.values(ANIME_CATALOGS).map(c=>({type:'series',id:c.id,name:c.name,extra:[{name:'search',isRequired:false},{name:'skip',isRequired:false}]})),
   ...Object.values(VSMOV_CATALOGS).map(c=>({type:c.type,id:c.id,name:c.name,extra:[{name:'skip',isRequired:false}]}))
 ];
-const manifest={id:'community.yanhhh3d.direct',version:'3.6.2',name:'YanHH3D + Anime + Phim',description:'YanHH3D, AnimeHay, HH3D và danh mục phim theo quốc gia',logo:BASE+'/favicon.ico',resources:['catalog',{name:'meta',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']},{name:'stream',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']}],types:['series','movie'],catalogs:catalogManifest,behaviorHints:{configurable:false}};
+const manifest={id:'community.yanhhh3d.direct',version:'3.6.3',name:'YanHH3D + Anime + Phim',description:'YanHH3D, AnimeHay, HH3D và danh mục phim theo quốc gia',logo:BASE+'/favicon.ico',resources:['catalog',{name:'meta',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']},{name:'stream',types:['series'],idPrefixes:['yanhh3d:','animehay:','hh3d:']}],types:['series','movie'],catalogs:catalogManifest,behaviorHints:{configurable:false}};
 const builder=new addonBuilder(manifest);
 function decode(s){return String(s||'').replace(/\\\//g,'/').replace(/\\u0026/gi,'&').replace(/\\u003d/gi,'=').replace(/&amp;/g,'&').replace(/&#39;|&apos;/gi,"'").replace(/&quot;/g,'"').replace(/&lt;/g,'<').replace(/&gt;/g,'>')}
 function clean(s){return decode(String(s||'').replace(/<script[\s\S]*?<\/script>/gi,' ').replace(/<style[\s\S]*?<\/style>/gi,' ').replace(/<[^>]+>/g,' ')).replace(/\s+/g,' ').trim()}
@@ -42,9 +42,9 @@ async function yanRoots(force=false){
   const task=(async()=>{
     const redirected=[];
     try{const page=await fetchPage(YAN_DISCOVERY,YAN_DISCOVERY,12000);if(isYanPage(page.text))redirected.push(new URL(page.url).origin)}catch(_){}
-    const probes=uniqueOrigins([...redirected,ACTIVE_YAN_BASE,BASE,'https://yanhh3d.pw']);
+    const probes=uniqueOrigins([...redirected,ACTIVE_YAN_BASE,BASE,'https://yanhh3d.men','https://yanhh3d.pw']);
     const checked=await Promise.allSettled(probes.map(async root=>{const page=await fetchPage(root+'/',root+'/',12000);if(!isYanPage(page.text))throw Error('Not YanHH3D');return new URL(page.url).origin}));
-    const live=checked.flatMap(x=>x.status==='fulfilled'?[x.value]:[]),roots=uniqueOrigins([...redirected,...live,ACTIVE_YAN_BASE,BASE,'https://yanhh3d.pw']);
+    const live=checked.flatMap(x=>x.status==='fulfilled'?[x.value]:[]),roots=uniqueOrigins([...redirected,...live,ACTIVE_YAN_BASE,BASE,'https://yanhh3d.men','https://yanhh3d.pw']);
     if(live.length)ACTIVE_YAN_BASE=live[0];
     yanDomainCache={time:Date.now(),roots};
     return roots;
@@ -149,7 +149,7 @@ builder.defineMetaHandler(async a=>{
 function epUrl(id){const p=String(id).indexOf(':1:');if(p<0)return null;const r=String(id).slice(p+3),i=r.indexOf(':');if(i<0)return null;try{return decodeURIComponent(r.slice(i+1))}catch(_){return null}}
 function iframes(h,b){const o=[],r=/<iframe\b[^>]*>/gi;let m;while((m=r.exec(h||''))){const u=abs(attr(m[0],'src')||attr(m[0],'data-src'),b);if(u&&!o.includes(u)&&!/youtube|facebook\.com|doubleclick|analytics/i.test(u))o.push(u)}return o}
 function media(h,b){const o=[],r=/(?:https?:)?\/\/[^\s"'<>]+\.(?:m3u8|mp4)(?:\?[^\s"'<>]*)?/gi;let m;while((m=r.exec(decode(h||'')))){const u=abs(m[0],b);if(u)o.push(u)}return [...new Set(o)]}
-function labeledSources(h,edition){const out=[];for(const m of String(h||'').matchAll(/<a\b(?=[^>]*\bbtn3dsv\b)[^>]*>[\s\S]*?<\/a>/gi)){const url=abs(attr(m[0],'data-src')),label=clean(m[0]);try{const host=new URL(url).hostname;if((host==='rptcdn.site'||host.endsWith('.rptcdn.site'))&&/\.m3u8(?:[?#]|$)/i.test(url))out.push({url,label:label||'HD',edition})}catch(_){}}return out}
+function labeledSources(h,edition){const out=[];for(const m of String(h||'').matchAll(/<a\b(?=[^>]*\bbtn3dsv\b)[^>]*>[\s\S]*?<\/a>/gi)){const url=abs(attr(m[0],'data-src')),label=clean(m[0]);try{const host=new URL(url).hostname;if((host==='rptcdn.site'||host.endsWith('.rptcdn.site')||host==='streamrpt.xyz'||host.endsWith('.streamrpt.xyz'))&&/\.m3u8(?:[?#]|$)/i.test(url))out.push({url,label:label||'HD',edition})}catch(_){}}return out}
 async function editionSources(slug,ep,edition){const suffix=(edition==='Thuyết minh'?'':'sever2/')+slug+'/tap-'+ep,h=await yanGet('/'+suffix,null,65000),found=labeledSources(h,edition);if(!found.length)throw Error('No '+edition+' links');return found}
 async function sourcesForSlug(slug,ep){const results=await Promise.allSettled([editionSources(slug,ep,'Thuyết minh'),editionSources(slug,ep,'Vietsub')]),out=results.flatMap(x=>x.status==='fulfilled'?x.value:[]);if(!out.length)throw Error('No direct streams for '+slug);return out}
 async function resolveLegacySlug(slug){const h=await yanGet('/?s='+encodeURIComponent(slug.replace(/-/g,' ')),null,45000),wanted=new Set(slug.split('-')),candidates=[];for(const a of anchors(h)){try{const u=new URL(a.href),parts=u.pathname.split('/').filter(Boolean);if(!/^yanhh3d\./i.test(u.hostname)||parts.length!==1)continue;const candidate=parts[0],label=slugify(attr(a.tag,'title')||a.text||candidate),tokens=new Set((label+'-'+candidate).split('-')),matches=[...wanted].filter(x=>tokens.has(x)).length,score=matches/Math.max(1,wanted.size);if(score>=0.5)candidates.push({slug:candidate,score})}catch(_){}}candidates.sort((a,b)=>b.score-a.score);return candidates[0]?.slug||null}
