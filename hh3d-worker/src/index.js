@@ -1,5 +1,6 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.you';
+const BUILD_VERSION = '2026-10-01-prewarm-v1';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const INITIAL_SEGMENTS_TO_PREWARM = 4;
@@ -421,7 +422,11 @@ function validateSegmentUrl(value) {
 async function proxySegment(request, origin) {
   const cacheKey = new Request(request.url, { method: 'GET' });
   const cached = await cachedResponse(cacheKey);
-  if (cached) return cached;
+  if (cached) {
+    const headers = new Headers(cached.headers);
+    headers.set('X-HH3D-Segment-Cache', 'HIT');
+    return new Response(cached.body, { status: cached.status, headers });
+  }
   const inflightKey = cacheKey.url;
   let pending = segmentInflight.get(inflightKey);
   if (!pending) {
@@ -453,6 +458,7 @@ async function proxySegment(request, origin) {
         'Content-Type': 'video/mp2t',
         'Cache-Control': 'public, max-age=86400',
         'Content-Length': String(body.byteLength),
+        'X-HH3D-Segment-Cache': 'MISS',
       });
       return storeResponse(cacheKey, new Response(body, { status: 200, headers: responseHeaders }));
     })();
@@ -605,7 +611,8 @@ export default {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
     const url = new URL(request.url);
     if (url.pathname === '/health') {
-      return json({ ok: true, service: 'hh3d-stream-resolver', origin: await discoverOrigin() }, 200, {
+      return json({ ok: true, service: 'hh3d-stream-resolver', version: BUILD_VERSION,
+        origin: await discoverOrigin() }, 200, {
         'Cache-Control': 'no-store',
       });
     }
@@ -721,6 +728,7 @@ export default {
           'Cache-Control': 'no-store',
           'X-HH3D-Origin': result.origin,
           'X-HH3D-Quality': result.label,
+          'X-HH3D-Version': BUILD_VERSION,
         }),
       });
     } catch (error) {
