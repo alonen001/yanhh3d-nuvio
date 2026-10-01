@@ -2,6 +2,7 @@ const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.you';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
+const INITIAL_SEGMENTS_TO_PREWARM = 4;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
 const EMBED_SEGMENT_HOST = /^scontent-[a-z0-9-]+\.xx\.cdnfb\.net$/i;
@@ -9,6 +10,8 @@ const YAN_SEGMENT_HOSTS = new Set(['m.defifa.com']);
 const YAN_TIKTOK_SEGMENT_HOST = /^p\d{1,3}-ad-site-sign-sg\.tiktokcdn\.com$/i;
 
 let originCache = { value: FALLBACK_ORIGIN, expiresAt: Date.now() + 10 * 60 * 1000 };
+const postIdCache = new Map();
+const segmentInflight = new Map();
 
 function corsHeaders(extra = {}) {
   return {
@@ -206,23 +209,17 @@ function postIdFromHtml(html) {
 }
 
 async function findPostId(origin, slug) {
+  const cached = postIdCache.get(slug);
+  if (cached) return cached;
   const detailUrl = `${origin}/${slug}/`;
-  try {
-    const head = await timedFetch(detailUrl, {
-      method: 'HEAD',
-      headers: siteHeaders(origin),
-    });
-    if (head.ok) {
-      const id = postIdFromHeaders(head.headers);
-      if (id) return id;
-    }
-  } catch (_) {}
-
-  for (const url of [`${origin}/${slug}/embed/`, detailUrl]) {
+  for (const url of [detailUrl, `${origin}/${slug}/embed/`]) {
     const response = await timedFetch(url, { headers: siteHeaders(origin) });
     if (!response.ok) continue;
     const id = postIdFromHeaders(response.headers) || postIdFromHtml(await response.text());
-    if (id) return id;
+    if (id) {
+      postIdCache.set(slug, id);
+      return id;
+    }
   }
   throw new Error(`Không tìm thấy mã phim HH3D cho ${slug}`);
 }
@@ -422,36 +419,62 @@ function validateSegmentUrl(value) {
 }
 
 async function proxySegment(request, origin) {
-  const target = validateSegmentUrl(new URL(request.url).searchParams.get('url'));
-  const headers = {
-    'User-Agent': UA,
-    Referer: EMBED_SEGMENT_HOST.test(target.hostname) ? 'https://scontent.ibytedance.net/' : `${origin}/`,
-    Accept: '*/*',
-  };
-  const range = request.headers.get('range');
-  if (range) headers.Range = range;
-  const response = await timedFetch(target, { headers });
-  const contentType = response.headers.get('content-type') || '';
-  if (!response.ok || /text\/html/i.test(contentType)) {
-    throw new Error(`HH3D segment HTTP ${response.status}`);
+  const cacheKey = new Request(request.url, { method: 'GET' });
+  const cached = await cachedResponse(cacheKey);
+  if (cached) return cached;
+  const inflightKey = cacheKey.url;
+  let pending = segmentInflight.get(inflightKey);
+  if (!pending) {
+    pending = (async () => {
+      const target = validateSegmentUrl(new URL(request.url).searchParams.get('url'));
+      const headers = {
+        'User-Agent': UA,
+        Referer: EMBED_SEGMENT_HOST.test(target.hostname) ? 'https://scontent.ibytedance.net/' : `${origin}/`,
+        Accept: '*/*',
+      };
+      if (EMBED_SEGMENT_HOST.test(target.hostname)) headers.Origin = 'https://scontent.ibytedance.net';
+      const response = await timedFetch(target, { headers });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok || /text\/html/i.test(contentType)) {
+        throw new Error(`HH3D segment HTTP ${response.status}`);
+      }
+      const source = new Uint8Array(await response.arrayBuffer());
+      let transportOffset = -1;
+      const scanLimit = Math.min(source.length - 376, 4096);
+      for (let index = 0; index < scanLimit; index += 1) {
+        if (source[index] === 0x47 && source[index + 188] === 0x47 && source[index + 376] === 0x47) {
+          transportOffset = index;
+          break;
+        }
+      }
+      if (transportOffset < 0) throw new Error('HH3D segment is not MPEG-TS');
+      const body = source.slice(transportOffset);
+      const responseHeaders = corsHeaders({
+        'Content-Type': 'video/mp2t',
+        'Cache-Control': 'public, max-age=86400',
+        'Content-Length': String(body.byteLength),
+      });
+      return storeResponse(cacheKey, new Response(body, { status: 200, headers: responseHeaders }));
+    })();
+    segmentInflight.set(inflightKey, pending);
+    pending.finally(() => {
+      if (segmentInflight.get(inflightKey) === pending) segmentInflight.delete(inflightKey);
+    }).catch(() => {});
   }
-  const source = new Uint8Array(await response.arrayBuffer());
-  let transportOffset = -1;
-  const scanLimit = Math.min(source.length - 376, 4096);
-  for (let index = 0; index < scanLimit; index += 1) {
-    if (source[index] === 0x47 && source[index + 188] === 0x47 && source[index + 376] === 0x47) {
-      transportOffset = index;
-      break;
-    }
-  }
-  if (transportOffset < 0) throw new Error('HH3D segment is not MPEG-TS');
-  const body = source.slice(transportOffset);
-  const responseHeaders = corsHeaders({
-    'Content-Type': 'video/mp2t',
-    'Cache-Control': 'public, max-age=86400',
-    'Content-Length': String(body.byteLength),
-  });
-  return new Response(body, { status: 200, headers: responseHeaders });
+  return (await pending).clone();
+}
+
+function initialSegmentUrls(playlist, resolverOrigin) {
+  const prefix = `${resolverOrigin}/segment?`;
+  return String(playlist).split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(line => line.startsWith(prefix))
+    .slice(0, INITIAL_SEGMENTS_TO_PREWARM);
+}
+
+async function prewarmInitialSegments(playlist, resolverOrigin, origin) {
+  const urls = initialSegmentUrls(playlist, resolverOrigin);
+  await Promise.allSettled(urls.map(url => proxySegment(new Request(url), origin)));
 }
 
 function validateYanPlayerUrl(value) {
@@ -578,7 +601,7 @@ export async function resolvePlaylist(slugValue, episodeValue, resolverOrigin = 
 }
 
 export default {
-  async fetch(request) {
+  async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
     const url = new URL(request.url);
     if (url.pathname === '/health') {
@@ -688,6 +711,9 @@ export default {
     }
     try {
       const result = await resolvePlaylist(url.searchParams.get('slug'), url.searchParams.get('ep'), url.origin);
+      if (ctx?.waitUntil) {
+        ctx.waitUntil(prewarmInitialSegments(result.playlist, url.origin, result.origin));
+      }
       return new Response(result.playlist, {
         status: 200,
         headers: corsHeaders({
