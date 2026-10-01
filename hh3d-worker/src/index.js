@@ -1,6 +1,6 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.you';
-const BUILD_VERSION = '2026-10-01-prewarm-v1';
+const BUILD_VERSION = '2026-10-01-source-patterns-v2';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const INITIAL_SEGMENTS_TO_PREWARM = 4;
@@ -324,8 +324,11 @@ function allowedPlaylistUrl(value) {
 
 function validateEmbedUrl(value) {
   const url = new URL(String(value || ''));
+  const legacyEmbedPath = /^\/p\/f2_[a-z0-9]+_[a-z0-9._-]{1,160}\/embed$/i.test(url.pathname);
+  const uuidEmbedPath = /^\/p\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.[a-z0-9]{3,12}\/embed$/i
+    .test(url.pathname);
   if (!allowedPlaylistUrl(url.href)
-    || !/^\/p\/f2_[a-z0-9]+_[a-z0-9._-]{1,160}\/embed$/i.test(url.pathname)) {
+    || (!legacyEmbedPath && !uuidEmbedPath)) {
     throw new Error('HH3D embed URL is not allowed');
   }
   return url;
@@ -412,7 +415,9 @@ function validateSegmentUrl(value) {
   }
   const oldPath = /^\/f2_[a-z0-9_-]{1,160}_\d{1,12}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname);
   const embedPath = EMBED_SEGMENT_HOST.test(url.hostname)
-    && /^\/f2_[a-z0-9._-]{1,200}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname);
+    && (/^\/f2_[a-z0-9._-]{1,200}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname)
+      || /^\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\/[a-z0-9_-]{1,160}\.png$/i
+        .test(url.pathname));
   if (url.pathname.length > 400 || (!oldPath && !embedPath)) {
     throw new Error('Invalid segment path');
   }
