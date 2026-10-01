@@ -1,9 +1,10 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
-const FALLBACK_ORIGIN = 'https://hoathinh3d.de';
+const FALLBACK_ORIGIN = 'https://hoathinh3d.you';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
+const EMBED_SEGMENT_HOST = /^scontent-[a-z0-9-]+\.xx\.cdnfb\.net$/i;
 const YAN_SEGMENT_HOSTS = new Set(['m.defifa.com']);
 const YAN_TIKTOK_SEGMENT_HOST = /^p\d{1,3}-ad-site-sign-sg\.tiktokcdn\.com$/i;
 
@@ -299,6 +300,7 @@ async function getPlayerData(origin, slug, episode, postId) {
       'X-Requested-With': 'XMLHttpRequest',
       'X-Halim-Client': clientId,
       Cookie: cookies,
+      Origin: origin,
       Referer: `${origin}/${slug}/tap-${episode}/`,
     }),
     body: JSON.stringify({ key_id: encrypted.kid }),
@@ -322,9 +324,75 @@ function allowedPlaylistUrl(value) {
   }
 }
 
+function validateEmbedUrl(value) {
+  const url = new URL(String(value || ''));
+  if (!allowedPlaylistUrl(url.href)
+    || !/^\/p\/f2_[a-z0-9]+_[a-z0-9._-]{1,160}\/embed$/i.test(url.pathname)) {
+    throw new Error('HH3D embed URL is not allowed');
+  }
+  return url;
+}
+
+function decodeEmbedConfig(payload, mask) {
+  const encrypted = base64UrlBytes(payload);
+  const key = base64UrlBytes([...String(mask || '')].reverse().join(''));
+  if (!encrypted.length || !key.length) throw new Error('HH3D embed data is invalid');
+  const plain = new Uint8Array(encrypted.length);
+  for (let index = 0; index < encrypted.length; index += 1) {
+    plain[index] = encrypted[index] ^ key[index % key.length];
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(plain));
+  } catch (_) {
+    throw new Error('HH3D embed config is invalid');
+  }
+}
+
+function validateEmbedStreamUrl(value, embedUrl) {
+  const url = new URL(String(value || ''), embedUrl);
+  const basePath = embedUrl.pathname.replace(/\/embed$/, '');
+  if (url.protocol !== 'https:' || url.origin !== embedUrl.origin
+    || url.pathname !== `${basePath}/stream`
+    || !/^[a-f0-9]{12,64}\.\d{8,12}$/i.test(url.searchParams.get('t') || '')) {
+    throw new Error('HH3D embed stream URL is not allowed');
+  }
+  return url;
+}
+
+async function resolveEmbedPlaylist(value, origin, resolverOrigin) {
+  const embedUrl = validateEmbedUrl(value);
+  const embedResponse = await timedFetch(embedUrl, {
+    headers: { 'User-Agent': UA, Referer: `${origin}/`, Accept: 'text/html,*/*' },
+  });
+  if (!embedResponse.ok) throw new Error(`HH3D embed HTTP ${embedResponse.status}`);
+  const html = await embedResponse.text();
+  const playerTag = html.match(/<div\b(?=[^>]*\bid=["']player["'])[^>]*>/i)?.[0];
+  const payload = attribute(playerTag, 'data-p');
+  const mask = attribute(playerTag, 'data-m');
+  if (!payload || !mask) throw new Error('HH3D embed data not found');
+  const config = decodeEmbedConfig(payload, mask);
+  const streamUrl = validateEmbedStreamUrl(config?.s, embedUrl);
+  const playlistResponse = await timedFetch(streamUrl, {
+    headers: {
+      'User-Agent': UA,
+      Referer: embedUrl.href,
+      Origin: embedUrl.origin,
+      Accept: 'application/vnd.apple.mpegurl,*/*',
+    },
+  });
+  if (!playlistResponse.ok) throw new Error(`HH3D embed playlist HTTP ${playlistResponse.status}`);
+  const playlist = absolutizePlaylist(await playlistResponse.text(), streamUrl, resolverOrigin);
+  if (!playlist.trimStart().startsWith('#EXTM3U')) throw new Error('HH3D embed data is not HLS');
+  return playlist;
+}
+
+function isProxiedSegmentHost(hostname) {
+  return PROXIED_SEGMENT_HOSTS.has(hostname) || EMBED_SEGMENT_HOST.test(hostname);
+}
+
 function playableMediaUrl(value, playlistUrl, resolverOrigin) {
   const absolute = new URL(value, playlistUrl);
-  if (resolverOrigin && PROXIED_SEGMENT_HOSTS.has(absolute.hostname)) {
+  if (resolverOrigin && isProxiedSegmentHost(absolute.hostname)) {
     return `${resolverOrigin}/segment?url=${encodeURIComponent(absolute.href)}`;
   }
   return absolute.href;
@@ -341,11 +409,13 @@ function absolutizePlaylist(text, playlistUrl, resolverOrigin = '') {
 
 function validateSegmentUrl(value) {
   const url = new URL(String(value || ''));
-  if (url.protocol !== 'https:' || !PROXIED_SEGMENT_HOSTS.has(url.hostname)) {
+  if (url.protocol !== 'https:' || !isProxiedSegmentHost(url.hostname)) {
     throw new Error('Segment host is not allowed');
   }
-  if (url.pathname.length > 400
-    || !/^\/f2_[a-z0-9_-]{1,160}_\d{1,12}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname)) {
+  const oldPath = /^\/f2_[a-z0-9_-]{1,160}_\d{1,12}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname);
+  const embedPath = EMBED_SEGMENT_HOST.test(url.hostname)
+    && /^\/f2_[a-z0-9._-]{1,200}\/[a-z0-9_-]{1,160}\.png$/i.test(url.pathname);
+  if (url.pathname.length > 400 || (!oldPath && !embedPath)) {
     throw new Error('Invalid segment path');
   }
   return url;
@@ -355,7 +425,7 @@ async function proxySegment(request, origin) {
   const target = validateSegmentUrl(new URL(request.url).searchParams.get('url'));
   const headers = {
     'User-Agent': UA,
-    Referer: `${origin}/`,
+    Referer: EMBED_SEGMENT_HOST.test(target.hostname) ? 'https://scontent.ibytedance.net/' : `${origin}/`,
     Accept: '*/*',
   };
   const range = request.headers.get('range');
@@ -484,8 +554,13 @@ export async function resolvePlaylist(slugValue, episodeValue, resolverOrigin = 
     try {
       const postId = await findPostId(origin, slug);
       const player = await getPlayerData(origin, slug, episode, postId);
-      if (!player?.status || player.type !== 'hls' || !allowedPlaylistUrl(player.file)) {
-        throw new Error('HH3D không trả về playlist HLS hợp lệ');
+      if (!player?.status) throw new Error('HH3D player không khả dụng');
+      if (player.type === 'embed' && player.embed_url) {
+        const playlist = await resolveEmbedPlaylist(player.embed_url, origin, resolverOrigin);
+        return { playlist, origin, label: player.label || '1080', skipTime: player.skip_time || 0 };
+      }
+      if (player.type !== 'hls' || !allowedPlaylistUrl(player.file)) {
+        throw new Error('HH3D không trả về nguồn phát hợp lệ');
       }
       const playlistResponse = await timedFetch(player.file, {
         headers: { 'User-Agent': UA, Referer: `${origin}/`, Accept: '*/*' },
