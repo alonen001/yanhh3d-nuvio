@@ -1,12 +1,14 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.you';
-const BUILD_VERSION = '2026-10-01-source-patterns-v2';
+const BUILD_VERSION = '2026-10-15-yan-streamrpt1';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const INITIAL_SEGMENTS_TO_PREWARM = 4;
 const UA = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/131 Mobile Safari/537.36';
 const PROXIED_SEGMENT_HOSTS = new Set(['m.ckjdsib32rkjvsd.xyz']);
 const EMBED_SEGMENT_HOST = /^scontent-[a-z0-9-]+\.xx\.cdnfb\.net$/i;
+const YAN_PLAYER_HOSTS = new Set(['rptcdn.site', 'streamrpt.xyz', 'streamrpt1.site']);
+const YAN_SITE_ORIGIN = 'https://yanhh3d.chat';
 const YAN_SEGMENT_HOSTS = new Set(['m.defifa.com']);
 const YAN_TIKTOK_SEGMENT_HOST = /^p\d{1,3}-ad-site-sign-sg\.tiktokcdn\.com$/i;
 
@@ -491,8 +493,8 @@ async function prewarmInitialSegments(playlist, resolverOrigin, origin) {
 function validateYanPlayerUrl(value) {
   const url = new URL(String(value || ''));
   const host = url.hostname.toLowerCase();
-  if (url.protocol !== 'https:' || !(host === 'rptcdn.site' || host.endsWith('.rptcdn.site')
-    || host === 'streamrpt.xyz' || host.endsWith('.streamrpt.xyz'))) {
+  const allowedHost = [...YAN_PLAYER_HOSTS].some(domain => host === domain || host.endsWith(`.${domain}`));
+  if (url.protocol !== 'https:' || !allowedHost) {
     throw new Error('YanHH3D player host is not allowed');
   }
   if (!/^\/o2\/v\/t2\/f2\/m\d{1,6}\/[a-f0-9-]{36}\.m3u8$/i.test(url.pathname)) {
@@ -533,7 +535,7 @@ function validateYanSegmentUrl(value) {
 async function resolveYanPlaylist(value, resolverOrigin) {
   const playerUrl = validateYanPlayerUrl(value);
   const playerResponse = await timedFetch(playerUrl, {
-    headers: siteHeaders('https://yanhh3d.kim'),
+    headers: siteHeaders(YAN_SITE_ORIGIN),
   });
   if (!playerResponse.ok) throw new Error(`YanHH3D player HTTP ${playerResponse.status}`);
   const html = await playerResponse.text();
@@ -558,7 +560,7 @@ async function resolveYanPlaylist(value, resolverOrigin) {
 
 async function proxyYanSegment(request) {
   const target = validateYanSegmentUrl(new URL(request.url).searchParams.get('url'));
-  const headers = { 'User-Agent': UA, Referer: 'https://yanhh3d.kim/', Accept: '*/*' };
+  const headers = { 'User-Agent': UA, Referer: `${YAN_SITE_ORIGIN}/`, Accept: '*/*' };
   const response = await timedFetch(target, { headers });
   if (!response.ok) throw new Error(`YanHH3D segment HTTP ${response.status}`);
   const source = new Uint8Array(await response.arrayBuffer());
