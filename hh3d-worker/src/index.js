@@ -1,7 +1,7 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.pw';
 const ORIGIN_MIRRORS = ['https://hoathinh3d.pw', 'https://hoathinh3d.de', 'https://hoathinh3d.you'];
-const BUILD_VERSION = '2026-11-17-hhtq1';
+const BUILD_VERSION = '2026-11-17-hhtq2';
 const HHTQ_ORIGIN = 'https://hhhtq.team';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -364,13 +364,39 @@ async function resolveHhtqVariant(masterUrl, referer, resolverOrigin) {
   return rewriteHhtqPlaylist(playlist, variantUrl, resolverOrigin);
 }
 
-async function resolveOkruPlaylist(id, episode, resolverOrigin) {
-  const episodePage = await fetchHhtqPage(`/xem/${id}-sv3-ep${episode}/`, 25_000);
-  const playerUrl = hhtqPlayerUrl(episodePage);
+async function hhtqEpisodePlayerUrls(id, episode) {
+  // The site rotates embed hosts per episode and per server slot: sv3 is
+  // OK.ru on ep 1 but abyssplayer on ep 167, sv1 is Dailymotion on ep 1
+  // but Archive.org on ep 167. Collect every server's player URL and
+  // dispatch on the host instead of assuming a fixed host per slot.
+  const pages = await Promise.allSettled([1, 2, 3].map(server =>
+    fetchHhtqPage(`/xem/${id}-sv${server}-ep${episode}/`, 25_000)
+      .then(html => ({ html, referer: `${HHTQ_ORIGIN}/xem/${id}-sv${server}-ep${episode}/` }))));
+  const urls = [];
+  for (const result of pages) {
+    if (result.status !== 'fulfilled') continue;
+    const url = hhtqPlayerUrl(result.value.html);
+    if (url && !urls.some(item => item.url === url)) urls.push({ url, referer: result.value.referer });
+  }
+  return urls;
+}
+
+function hhtqHostKind(url) {
+  const value = String(url || '');
+  if (/ok\.ru\/videoembed\/\d+/i.test(value)) return 'okru';
+  if (/archive\.org\/embed\//i.test(value)) return 'archive';
+  if (/rumble\.com\/embed\//i.test(value)) return 'rumble';
+  if (/dailymotion\.com/i.test(value)) return 'dailymotion';
+  return 'unknown';
+}
+
+const HHTQ_HOST_PRIORITY = { okru: 0, archive: 1, rumble: 2, dailymotion: 3, unknown: 4 };
+
+async function resolveOkruUrl(playerUrl, referer, resolverOrigin) {
   const embedId = okruEmbedId(playerUrl);
-  if (!embedId) throw new Error('HHTQ server 3 không có link phát');
+  if (!embedId) throw new Error('HHTQ server OK.ru không có link phát');
   const embedResponse = await timedFetch(`https://ok.ru/videoembed/${embedId}`, {
-    headers: { 'User-Agent': UA, Referer: `${HHTQ_ORIGIN}/xem/${id}-sv3-ep${episode}/`, Accept: 'text/html,*/*' },
+    headers: { 'User-Agent': UA, Referer: referer, Accept: 'text/html,*/*' },
   }, 25_000);
   if (!embedResponse.ok) throw new Error(`HHTQ embed HTTP ${embedResponse.status}`);
   const hlsUrl = okruHlsUrl(await embedResponse.text());
@@ -379,9 +405,36 @@ async function resolveOkruPlaylist(id, episode, resolverOrigin) {
   return { playlist, label: '1080' };
 }
 
-async function resolveDailymotionPlaylist(id, episode, resolverOrigin) {
-  const episodePage = await fetchHhtqPage(`/xem/${id}-sv1-ep${episode}/`, 25_000);
-  const playerUrl = hhtqPlayerUrl(episodePage);
+async function resolveArchiveUrl(playerUrl) {
+  const identifier = (String(playerUrl || '').match(/archive\.org\/embed\/([^/?#]+)/i) || [])[1];
+  if (!identifier) throw new Error('HHTQ Archive.org không có link phát');
+  const metaResponse = await timedFetch(`https://archive.org/metadata/${encodeURIComponent(identifier)}`, {
+    headers: { 'User-Agent': UA, Accept: 'application/json' },
+  }, 25_000);
+  if (!metaResponse.ok) throw new Error(`HHTQ Archive.org HTTP ${metaResponse.status}`);
+  const meta = await metaResponse.json();
+  const files = (meta?.files || []).filter(file =>
+    /\.mp4$/i.test(file?.name || '') && Number(file?.size) > 0);
+  if (!files.length) throw new Error('HHTQ Archive.org không có file video');
+  files.sort((a, b) => Number(b.size) - Number(a.size));
+  const file = files[0];
+  const direct = `https://archive.org/download/${encodeURIComponent(identifier)}/${encodeURIComponent(file.name)}`;
+  return { redirect: direct, label: '1080' };
+}
+
+async function resolveRumbleUrl(playerUrl, referer, resolverOrigin) {
+  const embedResponse = await timedFetch(playerUrl, {
+    headers: { 'User-Agent': UA, Referer: referer, Accept: 'text/html,*/*' },
+  }, 25_000);
+  if (!embedResponse.ok) throw new Error(`HHTQ Rumble HTTP ${embedResponse.status}`);
+  const html = (await embedResponse.text()).replace(/\\\//g, '/');
+  const masterUrl = (html.match(/https:\/\/rumble\.com\/hls-vod\/[A-Za-z0-9]+\/playlist\.m3u8(?:\?[^\s"'<>]*)?/i) || [])[0];
+  if (!masterUrl) throw new Error('HHTQ Rumble không có link phát');
+  const playlist = await resolveHhtqVariant(masterUrl, 'https://rumble.com/', resolverOrigin);
+  return { playlist, label: '1080' };
+}
+
+async function resolveDailymotionUrl(playerUrl, resolverOrigin) {
   const videoId = (String(playerUrl || '').match(/[?&]video=([A-Za-z0-9]+)/i) || [])[1];
   if (!videoId) throw new Error('HHTQ server 1 không có link phát');
   const metaResponse = await timedFetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`, {
@@ -398,11 +451,17 @@ async function resolveDailymotionPlaylist(id, episode, resolverOrigin) {
 export async function resolveHhtqPlaylist(idValue, episodeValue, resolverOrigin = '') {
   const id = validateHhtqId(idValue);
   const episode = validateEpisode(episodeValue);
+  const players = await hhtqEpisodePlayerUrls(id, episode);
+  if (!players.length) throw new Error('HHTQ không tìm thấy link phát cho tập này');
+  players.sort((a, b) => HHTQ_HOST_PRIORITY[hhtqHostKind(a.url)] - HHTQ_HOST_PRIORITY[hhtqHostKind(b.url)]);
   let lastError;
-  for (const attempt of [resolveOkruPlaylist, resolveDailymotionPlaylist]) {
+  for (const player of players) {
     try {
-      const result = await attempt(id, episode, resolverOrigin);
-      return { ...result, origin: HHTQ_ORIGIN };
+      const kind = hhtqHostKind(player.url);
+      if (kind === 'okru') return { ...(await resolveOkruUrl(player.url, player.referer, resolverOrigin)), origin: HHTQ_ORIGIN };
+      if (kind === 'archive') return { ...(await resolveArchiveUrl(player.url)), origin: HHTQ_ORIGIN };
+      if (kind === 'rumble') return { ...(await resolveRumbleUrl(player.url, player.referer, resolverOrigin)), origin: HHTQ_ORIGIN };
+      if (kind === 'dailymotion') return { ...(await resolveDailymotionUrl(player.url, resolverOrigin)), origin: HHTQ_ORIGIN };
     } catch (error) {
       lastError = error;
     }
@@ -417,8 +476,11 @@ function validateHhtqSegmentUrl(value) {
   const isOkcdn = /^vd\d+\.okcdn\.ru$/i.test(host) && url.pathname.startsWith('/expires/');
   const isDailymotion = host === 'cdndirector.dailymotion.com' || host.endsWith('.dailymotion.com')
     || host.endsWith('.dmcdn.net') || host === 'vod-progressive.akamaized.net';
-  if (!isOkcdn && !isDailymotion) throw new Error('HHTQ segment host is not allowed');
-  if (!/\.(ts|m3u8|mp4)([?#]|$)/i.test(url.pathname) && !url.pathname.endsWith('.ts')) {
+  // Rumble serves HLS segments as byte ranges of .tar archives on its CDN.
+  const isRumble = host === 'hugh.cdn.rumble.cloud' && url.pathname.endsWith('.tar')
+    && /^(?:media-\d+\.ts|chunklist\.m3u8)$/i.test(url.searchParams.get('r_file') || '');
+  if (!isOkcdn && !isDailymotion && !isRumble) throw new Error('HHTQ segment host is not allowed');
+  if (!isRumble && !/\.(ts|m3u8|mp4)([?#]|$)/i.test(url.pathname) && !url.pathname.endsWith('.ts')) {
     throw new Error('Invalid HHTQ segment path');
   }
   return url;
@@ -433,11 +495,14 @@ async function proxyHhtqSegment(request) {
     return new Response(cached.body, { status: cached.status, headers });
   }
   const target = validateHhtqSegmentUrl(new URL(request.url).searchParams.get('url'));
-  const isOkcdn = /\.okcdn\.ru$/i.test(target.hostname);
+  const host = target.hostname.toLowerCase();
+  const referer = /\.okcdn\.ru$/i.test(host) ? 'https://ok.ru/'
+    : host.endsWith('.rumble.cloud') ? 'https://rumble.com/'
+    : 'https://geo.dailymotion.com/';
   const response = await timedFetch(target, {
     headers: {
       'User-Agent': UA,
-      Referer: isOkcdn ? 'https://ok.ru/' : 'https://geo.dailymotion.com/',
+      Referer: referer,
       Accept: '*/*',
     },
   });
@@ -1083,6 +1148,19 @@ export default {
     if (url.pathname === '/hhtq/resolve' && request.method === 'GET') {
       try {
         const result = await resolveHhtqPlaylist(url.searchParams.get('id'), url.searchParams.get('ep'), url.origin);
+        if (result.redirect) {
+          // Direct file source (e.g. Archive.org MP4): hand the player the file URL.
+          return new Response(null, {
+            status: 302,
+            headers: corsHeaders({
+              Location: result.redirect,
+              'Cache-Control': 'no-store',
+              'X-HHTQ-Origin': result.origin,
+              'X-HHTQ-Quality': result.label,
+              'X-HHTQ-Version': BUILD_VERSION,
+            }),
+          });
+        }
         return new Response(result.playlist, {
           status: 200,
           headers: corsHeaders({
