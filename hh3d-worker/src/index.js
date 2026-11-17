@@ -1,7 +1,7 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.pw';
 const ORIGIN_MIRRORS = ['https://hoathinh3d.pw', 'https://hoathinh3d.de', 'https://hoathinh3d.you'];
-const BUILD_VERSION = '2026-11-17-hh3d-mirror1';
+const BUILD_VERSION = '2026-11-17-hh3d-server2';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const INITIAL_SEGMENTS_TO_PREWARM = 4;
@@ -289,43 +289,57 @@ async function decryptPlayerPayload(encrypted, keyText) {
 }
 
 async function getPlayerData(origin, slug, episode, postId) {
-  const clientId = randomClientId();
-  const playerUrl = new URL('/wp-content/themes/halimmovies/player.php', origin);
-  playerUrl.searchParams.set('episode_slug', `tap-${episode}`);
-  playerUrl.searchParams.set('server_id', '1');
-  playerUrl.searchParams.set('subsv_id', '');
-  playerUrl.searchParams.set('post_id', postId);
+  // VIP 1 (server 1) currently returns "data not found" and does not play
+  // even in a real browser; VIP 2 plays there. Try server 1 first (current
+  // behaviour), then fall back to server 2. Referer uses the site's current
+  // episode URL format (/xem-phim-{slug}/tap-{ep}-sv{N}.html) — the old
+  // /{slug}/tap-{ep}/ URL is now a 404 page.
+  let lastError;
+  for (const serverId of [1, 2]) {
+    const clientId = randomClientId();
+    const referer = `${origin}/xem-phim-${slug}/tap-${episode}-sv${serverId}.html`;
+    try {
+      const playerUrl = new URL('/wp-content/themes/halimmovies/player.php', origin);
+      playerUrl.searchParams.set('episode_slug', `tap-${episode}`);
+      playerUrl.searchParams.set('server_id', String(serverId));
+      playerUrl.searchParams.set('subsv_id', '');
+      playerUrl.searchParams.set('post_id', postId);
 
-  const playerResponse = await timedFetch(playerUrl, {
-    headers: siteHeaders(origin, {
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-Halim-Client': clientId,
-      Referer: `${origin}/${slug}/tap-${episode}/`,
-    }),
-  });
-  if (!playerResponse.ok) throw new Error(`HH3D player HTTP ${playerResponse.status}`);
-  const encrypted = await playerResponse.json();
-  if (!encrypted?._encrypted || !encrypted.kid || !encrypted.iv || !encrypted.payload) {
-    throw new Error('HH3D player trả dữ liệu không hợp lệ');
+      const playerResponse = await timedFetch(playerUrl, {
+        headers: siteHeaders(origin, {
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Halim-Client': clientId,
+          Referer: referer,
+        }),
+      });
+      if (!playerResponse.ok) throw new Error(`HH3D player HTTP ${playerResponse.status}`);
+      const encrypted = await playerResponse.json();
+      if (!encrypted?._encrypted || !encrypted.kid || !encrypted.iv || !encrypted.payload) {
+        throw new Error('HH3D player trả dữ liệu không hợp lệ');
+      }
+
+      const cookies = cookieHeader(playerResponse.headers);
+      const keyResponse = await timedFetch(new URL('/wp-json/halim/v1/player-key', origin), {
+        method: 'POST',
+        headers: siteHeaders(origin, {
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest',
+          'X-Halim-Client': clientId,
+          Cookie: cookies,
+          Origin: origin,
+          Referer: referer,
+        }),
+        body: JSON.stringify({ key_id: encrypted.kid }),
+      });
+      if (!keyResponse.ok) throw new Error(`HH3D key HTTP ${keyResponse.status}`);
+      const keyData = await keyResponse.json();
+      if (!keyData?.success || !keyData.key) throw new Error('HH3D không cấp khóa giải mã');
+      return decryptPlayerPayload(encrypted, keyData.key);
+    } catch (error) {
+      lastError = error;
+    }
   }
-
-  const cookies = cookieHeader(playerResponse.headers);
-  const keyResponse = await timedFetch(new URL('/wp-json/halim/v1/player-key', origin), {
-    method: 'POST',
-    headers: siteHeaders(origin, {
-      'Content-Type': 'application/json',
-      'X-Requested-With': 'XMLHttpRequest',
-      'X-Halim-Client': clientId,
-      Cookie: cookies,
-      Origin: origin,
-      Referer: `${origin}/${slug}/tap-${episode}/`,
-    }),
-    body: JSON.stringify({ key_id: encrypted.kid }),
-  });
-  if (!keyResponse.ok) throw new Error(`HH3D key HTTP ${keyResponse.status}`);
-  const keyData = await keyResponse.json();
-  if (!keyData?.success || !keyData.key) throw new Error('HH3D không cấp khóa giải mã');
-  return decryptPlayerPayload(encrypted, keyData.key);
+  throw lastError || new Error('HH3D player không khả dụng');
 }
 
 function allowedPlaylistUrl(value) {
