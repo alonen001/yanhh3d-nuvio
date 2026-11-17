@@ -23,6 +23,17 @@ app.get(/^\/meta\/series\/hh3d(?::|%3a)([^/]+)\.json$/i, (req, res) => {
   res.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
   res.redirect(307, HH3D_RESOLVER + '/meta?slug=' + encodeURIComponent(req.params[0]));
 });
+app.get(/^\/catalog\/series\/hhtq-recent(?:\/(.*?))?\.json$/, (req, res) => {
+  const params = new URLSearchParams(req.params[0] || '');
+  const query = new URLSearchParams();
+  if (params.get('skip')) query.set('skip', params.get('skip'));
+  res.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
+  res.redirect(307, HH3D_RESOLVER + '/hhtq/catalog' + (query.size ? '?' + query : ''));
+});
+app.get(/^\/meta\/series\/hhtq(?::|%3a)(\d+)\.json$/i, (req, res) => {
+  res.set('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
+  res.redirect(307, HH3D_RESOLVER + '/hhtq/meta?id=' + encodeURIComponent(req.params[0]));
+});
 app.use(getRouter(addonInterface));
 
 if (require.main === module) {

@@ -1,7 +1,8 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
 const FALLBACK_ORIGIN = 'https://hoathinh3d.pw';
 const ORIGIN_MIRRORS = ['https://hoathinh3d.pw', 'https://hoathinh3d.de', 'https://hoathinh3d.you'];
-const BUILD_VERSION = '2026-11-17-hh3d-server2';
+const BUILD_VERSION = '2026-11-17-hhtq1';
+const HHTQ_ORIGIN = 'https://hhhtq.team';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const INITIAL_SEGMENTS_TO_PREWARM = 4;
@@ -212,6 +213,261 @@ function validateEpisode(value) {
   const episode = Number(value);
   if (!Number.isInteger(episode) || episode < 1 || episode > 100_000) throw new Error('Invalid episode');
   return episode;
+}
+
+function validateHhtqId(value) {
+  const id = String(value || '').trim();
+  if (!/^\d{1,6}$/.test(id)) throw new Error('Invalid HHTQ id');
+  return id;
+}
+
+function hhtqHeaders(referer) {
+  return {
+    'User-Agent': UA,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
+    Referer: referer || `${HHTQ_ORIGIN}/`,
+    'Cache-Control': 'no-cache',
+  };
+}
+
+async function fetchHhtqPage(path, timeout = REQUEST_TIMEOUT_MS) {
+  const response = await timedFetch(new URL(path, HHTQ_ORIGIN), { headers: hhtqHeaders() }, timeout);
+  if (!response.ok) throw new Error(`HHTQ page HTTP ${response.status}`);
+  return response.text();
+}
+
+function parseHhtqCatalog(html) {
+  // Only the "Mới Cập Nhật" module: slice from its heading to the next module heading.
+  let section = String(html || '');
+  const start = section.indexOf('Mới Cập Nhật');
+  if (start >= 0) {
+    const next = section.indexOf('module-title', start + 12);
+    section = next > start ? section.slice(start, next) : section.slice(start);
+  }
+  const items = [], seen = new Set();
+  for (const match of section.matchAll(/<a\b[^>]*href=["']\/xem\/(\d+)-sv\d+-ep\d+\/["'][^>]*title=["']([^"']+)["'][^>]*>/gi)) {
+    const id = match[1];
+    if (seen.has(id)) continue;
+    const after = section.slice(match.index, match.index + 1200);
+    const poster = after.match(/<img\b[^>]*data-src=["']([^"']+)["']/i)?.[1]
+      || after.match(/<img\b[^>]*src=["']([^"']+)["']/i)?.[1];
+    const title = cleanHtml(match[2]);
+    if (!title) continue;
+    seen.add(id);
+    items.push({ id, title, poster: poster ? decodeHtml(poster) : null });
+  }
+  return items;
+}
+
+async function hhtqCatalogData(skip) {
+  const html = await fetchHhtqPage('/', 25_000);
+  const items = parseHhtqCatalog(html);
+  if (!items.length) throw new Error('Không tải được danh mục HHTQ');
+  const from = Math.max(0, skip || 0);
+  return items.slice(from, from + 80);
+}
+
+function hhtqSeriesTitle(html, fallback) {
+  const h1 = String(html || '').match(/<h1\b[^>]*class=["'][^"']*page-title[^"']*["'][^>]*>[\s\S]*?<a\b[^>]*title=["']([^"']+)["']/i);
+  if (h1?.[1]) return cleanHtml(h1[1]);
+  const og = String(html || '').match(/<meta\b[^>]*property=["']og:title["'][^>]*>/i);
+  const ogTitle = cleanHtml(attribute(og?.[0], 'content') || '');
+  const stripped = ogTitle.replace(/^Tập\s+\d+\s+/i, '').replace(/\s+Server\s+\d+.*$/i, '').trim();
+  return stripped || fallback;
+}
+
+async function hhtqMetaData(idValue) {
+  const id = validateHhtqId(idValue);
+  const html = await fetchHhtqPage(`/xem/${id}-sv1-ep1/`, 30_000);
+  const posterTag = String(html || '').match(/<meta\b[^>]*property=["']og:image["'][^>]*>/i);
+  const poster = absoluteUrl(attribute(posterTag?.[0], 'content'), HHTQ_ORIGIN);
+  const episodes = new Set();
+  for (const match of html.matchAll(new RegExp(`/xem/${id}-sv\\d+-ep(\\d+)/`, 'g'))) episodes.add(Number(match[1]));
+  const description = metaDescription(html);
+  return { id, title: hhtqSeriesTitle(html, `HHTQ ${id}`), poster,
+    description: description === 'HH3D • Hoạt hình 3D' ? 'HHTQ • Hoạt hình Trung Quốc' : description,
+    episodes: [...episodes].filter(Boolean).sort((a, b) => a - b) };
+}
+
+function hhtqPlayerUrl(html) {
+  const match = String(html || '').match(/player_aaaa\s*=\s*(\{[\s\S]*?\})\s*<\/script>/i)
+    || String(html || '').match(/player_aaaa\s*=\s*(\{[^<]*\})/i);
+  if (!match) return null;
+  try {
+    const data = JSON.parse(match[1].replace(/\\\//g, '/'));
+    return typeof data.url === 'string' ? data.url.trim() : null;
+  } catch (_) { return null; }
+}
+
+function okruEmbedId(url) {
+  const match = String(url || '').match(/ok\.ru\/videoembed\/(\d+)/i);
+  return match?.[1] || null;
+}
+
+function okruHlsUrl(embedHtml) {
+  const decoded = decodeHtml(String(embedHtml || ''));
+  const match = decoded.match(/"ondemandHls"\s*:\s*"([^"]+)"/i);
+  if (!match) return null;
+  return match[1].replace(/\\\//g, '/');
+}
+
+function pickHhtqVariant(masterPlaylist, masterUrl) {
+  const variants = [];
+  const lines = String(masterPlaylist || '').split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const info = lines[index].match(/#EXT-X-STREAM-INF:[^\n]*BANDWIDTH=(\d+)/i);
+    if (!info) continue;
+    const uri = (lines[index + 1] || '').trim();
+    if (!uri || uri.startsWith('#')) continue;
+    variants.push({ bandwidth: Number(info[1]), uri });
+  }
+  if (!variants.length) return null;
+  variants.sort((a, b) => b.bandwidth - a.bandwidth);
+  return new URL(variants[0].uri, masterUrl).href;
+}
+
+function rewriteHhtqPlaylist(text, playlistUrl, resolverOrigin = '') {
+  const prefix = resolverOrigin ? `${resolverOrigin}/hhtq/segment?url=` : '/hhtq/segment?url=';
+  return String(text).split(/\r?\n/).map(line => {
+    const trimmed = line.trim();
+    if (!trimmed) return line;
+    if (trimmed.startsWith('#')) {
+      return line.replace(/URI="([^"]+)"/g, (_, value) => `URI="${prefix}${encodeURIComponent(new URL(value, playlistUrl).href)}"`);
+    }
+    return `${prefix}${encodeURIComponent(new URL(trimmed, playlistUrl).href)}`;
+  }).join('\n');
+}
+
+async function fetchHhtqPlaylist(url, referer) {
+  const response = await timedFetch(url, {
+    headers: { 'User-Agent': UA, Referer: referer, Accept: 'application/vnd.apple.mpegurl,*/*' },
+  }, 30_000);
+  if (!response.ok) throw new Error(`HHTQ playlist HTTP ${response.status}`);
+  const text = await response.text();
+  if (!text.trimStart().startsWith('#EXTM3U')) throw new Error('HHTQ playlist is not HLS');
+  return text;
+}
+
+async function resolveHhtqVariant(masterUrl, referer, resolverOrigin) {
+  const master = await fetchHhtqPlaylist(masterUrl, referer);
+  const variantUrl = pickHhtqVariant(master, masterUrl);
+  if (!variantUrl) throw new Error('HHTQ không có chất lượng phát');
+  let playlist = await fetchHhtqPlaylist(variantUrl, referer);
+  // A variant entry can itself be another master playlist; descend once.
+  if (/#EXT-X-STREAM-INF/i.test(playlist)) {
+    const nested = pickHhtqVariant(playlist, variantUrl);
+    if (!nested) throw new Error('HHTQ không có chất lượng phát');
+    playlist = await fetchHhtqPlaylist(nested, referer);
+    return rewriteHhtqPlaylist(playlist, nested, resolverOrigin);
+  }
+  return rewriteHhtqPlaylist(playlist, variantUrl, resolverOrigin);
+}
+
+async function resolveOkruPlaylist(id, episode, resolverOrigin) {
+  const episodePage = await fetchHhtqPage(`/xem/${id}-sv3-ep${episode}/`, 25_000);
+  const playerUrl = hhtqPlayerUrl(episodePage);
+  const embedId = okruEmbedId(playerUrl);
+  if (!embedId) throw new Error('HHTQ server 3 không có link phát');
+  const embedResponse = await timedFetch(`https://ok.ru/videoembed/${embedId}`, {
+    headers: { 'User-Agent': UA, Referer: `${HHTQ_ORIGIN}/xem/${id}-sv3-ep${episode}/`, Accept: 'text/html,*/*' },
+  }, 25_000);
+  if (!embedResponse.ok) throw new Error(`HHTQ embed HTTP ${embedResponse.status}`);
+  const hlsUrl = okruHlsUrl(await embedResponse.text());
+  if (!hlsUrl) throw new Error('HHTQ không tìm thấy link phát');
+  const playlist = await resolveHhtqVariant(hlsUrl, 'https://ok.ru/', resolverOrigin);
+  return { playlist, label: '1080' };
+}
+
+async function resolveDailymotionPlaylist(id, episode, resolverOrigin) {
+  const episodePage = await fetchHhtqPage(`/xem/${id}-sv1-ep${episode}/`, 25_000);
+  const playerUrl = hhtqPlayerUrl(episodePage);
+  const videoId = (String(playerUrl || '').match(/[?&]video=([A-Za-z0-9]+)/i) || [])[1];
+  if (!videoId) throw new Error('HHTQ server 1 không có link phát');
+  const metaResponse = await timedFetch(`https://www.dailymotion.com/player/metadata/video/${videoId}`, {
+    headers: { 'User-Agent': UA, Accept: 'application/json, */*' },
+  }, 25_000);
+  if (!metaResponse.ok) throw new Error(`HHTQ Dailymotion HTTP ${metaResponse.status}`);
+  const meta = await metaResponse.json();
+  const masterUrl = meta?.qualities?.auto?.[0]?.url;
+  if (!masterUrl) throw new Error('HHTQ Dailymotion không có link phát');
+  const playlist = await resolveHhtqVariant(masterUrl, 'https://geo.dailymotion.com/', resolverOrigin);
+  return { playlist, label: '1080' };
+}
+
+export async function resolveHhtqPlaylist(idValue, episodeValue, resolverOrigin = '') {
+  const id = validateHhtqId(idValue);
+  const episode = validateEpisode(episodeValue);
+  let lastError;
+  for (const attempt of [resolveOkruPlaylist, resolveDailymotionPlaylist]) {
+    try {
+      const result = await attempt(id, episode, resolverOrigin);
+      return { ...result, origin: HHTQ_ORIGIN };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError || new Error('Không lấy được nguồn HHTQ');
+}
+
+function validateHhtqSegmentUrl(value) {
+  const url = new URL(String(value || ''));
+  if (url.protocol !== 'https:' || url.pathname.length > 600) throw new Error('HHTQ segment host is not allowed');
+  const host = url.hostname.toLowerCase();
+  const isOkcdn = /^vd\d+\.okcdn\.ru$/i.test(host) && url.pathname.startsWith('/expires/');
+  const isDailymotion = host === 'cdndirector.dailymotion.com' || host.endsWith('.dailymotion.com')
+    || host.endsWith('.dmcdn.net') || host === 'vod-progressive.akamaized.net';
+  if (!isOkcdn && !isDailymotion) throw new Error('HHTQ segment host is not allowed');
+  if (!/\.(ts|m3u8|mp4)([?#]|$)/i.test(url.pathname) && !url.pathname.endsWith('.ts')) {
+    throw new Error('Invalid HHTQ segment path');
+  }
+  return url;
+}
+
+async function proxyHhtqSegment(request) {
+  const cacheKey = new Request(request.url, { method: 'GET' });
+  const cached = await cachedResponse(cacheKey);
+  if (cached) {
+    const headers = new Headers(cached.headers);
+    headers.set('X-HHTQ-Segment-Cache', 'HIT');
+    return new Response(cached.body, { status: cached.status, headers });
+  }
+  const target = validateHhtqSegmentUrl(new URL(request.url).searchParams.get('url'));
+  const isOkcdn = /\.okcdn\.ru$/i.test(target.hostname);
+  const response = await timedFetch(target, {
+    headers: {
+      'User-Agent': UA,
+      Referer: isOkcdn ? 'https://ok.ru/' : 'https://geo.dailymotion.com/',
+      Accept: '*/*',
+    },
+  });
+  if (!response.ok) throw new Error(`HHTQ segment HTTP ${response.status}`);
+  const contentType = response.headers.get('content-type') || '';
+  const buffer = new Uint8Array(await response.arrayBuffer());
+  const head = new TextDecoder().decode(buffer.slice(0, 16));
+  if (head.startsWith('#EXTM3U') || /mpegurl/i.test(contentType)) {
+    // Nested playlist: rewrite its entries through this proxy and return it.
+    const rewritten = rewriteHhtqPlaylist(new TextDecoder().decode(buffer), target.href, new URL(request.url).origin);
+    return new Response(rewritten, { status: 200, headers: corsHeaders({
+      'Content-Type': 'application/vnd.apple.mpegurl', 'Cache-Control': 'no-store',
+    }) });
+  }
+  let transportOffset = -1;
+  const scanLimit = Math.min(buffer.length - 376, 4096);
+  for (let index = 0; index < scanLimit; index += 1) {
+    if (buffer[index] === 0x47 && buffer[index + 188] === 0x47 && buffer[index + 376] === 0x47) {
+      transportOffset = index;
+      break;
+    }
+  }
+  if (transportOffset < 0) throw new Error('HHTQ segment is not MPEG-TS');
+  const body = buffer.slice(transportOffset);
+  return storeResponse(cacheKey, new Response(body, { status: 200, headers: corsHeaders({
+    'Content-Type': 'video/mp2t',
+    'Cache-Control': 'public, max-age=86400',
+    'Content-Length': String(body.byteLength),
+    'X-HHTQ-Segment-Cache': 'MISS',
+  }) }));
 }
 
 function postIdFromHeaders(headers) {
@@ -750,6 +1006,97 @@ export default {
         return json({ error: message }, /not allowed|Invalid/i.test(message) ? 400 : 502, {
           'Cache-Control': 'no-store',
         });
+      }
+    }
+    if (url.pathname === '/hhtq/catalog' && request.method === 'GET') {
+      try {
+        const cached = await cachedResponse(request);
+        if (cached) return cached;
+        const skip = Math.max(0, Number.parseInt(url.searchParams.get('skip') || '0', 10) || 0);
+        const items = await hhtqCatalogData(skip);
+        const metas = items.map(item => ({ id: `hhtq:${item.id}`, type: 'series', name: item.title,
+          poster: item.poster || undefined, posterShape: 'poster' }));
+        return storeResponse(request, json({ items, metas, cacheMaxAge: 3600 }, 200, {
+          'Cache-Control': 'public, max-age=3600',
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message, items: [] }, 502, { 'Cache-Control': 'no-store' });
+      }
+    }
+    if (url.pathname === '/hhtq/meta' && request.method === 'GET') {
+      try {
+        const cached = await cachedResponse(request);
+        if (cached) return cached;
+        const data = await hhtqMetaData(url.searchParams.get('id'));
+        const id = `hhtq:${data.id}`;
+        const videos = data.episodes.map(episode => ({ id: `${id}:1:${episode}`, title: `Tập ${episode}`,
+          season: Math.floor((episode - 1) / 50) + 1, episode: (episode - 1) % 50 + 1 }));
+        return storeResponse(request, json({ ...data, meta: { id, type: 'series', name: data.title, poster: data.poster || undefined,
+          background: data.poster || undefined, description: data.description, videos } }, 200, {
+          'Cache-Control': 'public, max-age=3600',
+        }));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, /Invalid/.test(message) ? 400 : 502, { 'Cache-Control': 'no-store' });
+      }
+    }
+    if (request.method === 'HEAD' && url.pathname === '/hhtq/resolve') {
+      try {
+        validateHhtqId(url.searchParams.get('id'));
+        validateEpisode(url.searchParams.get('ep'));
+        return new Response(null, {
+          status: 200,
+          headers: corsHeaders({
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Cache-Control': 'no-store',
+          }),
+        });
+      } catch (error) {
+        return new Response(null, { status: 400, headers: corsHeaders({ 'Cache-Control': 'no-store' }) });
+      }
+    }
+    if (request.method === 'HEAD' && url.pathname === '/hhtq/segment') {
+      try {
+        validateHhtqSegmentUrl(url.searchParams.get('url'));
+        return new Response(null, {
+          status: 200,
+          headers: corsHeaders({
+            'Content-Type': 'video/mp2t',
+            'Cache-Control': 'public, max-age=86400',
+          }),
+        });
+      } catch (error) {
+        return new Response(null, { status: 400, headers: corsHeaders({ 'Cache-Control': 'no-store' }) });
+      }
+    }
+    if (url.pathname === '/hhtq/segment' && request.method === 'GET') {
+      try {
+        return await proxyHhtqSegment(request);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return json({ error: message }, /not allowed|Invalid/i.test(message) ? 400 : 502, {
+          'Cache-Control': 'no-store',
+        });
+      }
+    }
+    if (url.pathname === '/hhtq/resolve' && request.method === 'GET') {
+      try {
+        const result = await resolveHhtqPlaylist(url.searchParams.get('id'), url.searchParams.get('ep'), url.origin);
+        return new Response(result.playlist, {
+          status: 200,
+          headers: corsHeaders({
+            'Content-Type': 'application/vnd.apple.mpegurl',
+            'Cache-Control': 'no-store',
+            'X-HHTQ-Origin': result.origin,
+            'X-HHTQ-Quality': result.label,
+            'X-HHTQ-Version': BUILD_VERSION,
+          }),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const status = /Invalid/.test(message) ? 400 : 502;
+        return json({ error: message }, status, { 'Cache-Control': 'no-store' });
       }
     }
     if (url.pathname !== '/resolve' || request.method !== 'GET') {
