@@ -1,6 +1,7 @@
 const DISCOVERY_URL = 'https://bit.ly/hh3d';
-const FALLBACK_ORIGIN = 'https://hoathinh3d.you';
-const BUILD_VERSION = '2026-10-15-yan-streamrpt1';
+const FALLBACK_ORIGIN = 'https://hoathinh3d.pw';
+const ORIGIN_MIRRORS = ['https://hoathinh3d.pw', 'https://hoathinh3d.de', 'https://hoathinh3d.you'];
+const BUILD_VERSION = '2026-11-17-hh3d-mirror1';
 const ORIGIN_TTL_MS = 6 * 60 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30_000;
 const INITIAL_SEGMENTS_TO_PREWARM = 4;
@@ -56,8 +57,14 @@ function siteHeaders(origin, extra = {}) {
   return {
     'User-Agent': UA,
     Accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
     Referer: `${origin}/`,
     'Cache-Control': 'no-cache',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
     ...extra,
   };
 }
@@ -85,18 +92,19 @@ function absoluteUrl(value, origin) {
 async function fetchSitePath(path, timeout = REQUEST_TIMEOUT_MS) {
   let lastError;
   for (const force of [false, true]) {
-    const origin = await discoverOrigin(force);
-    try {
-      const response = await timedFetch(new URL(path, origin), { headers: siteHeaders(origin) }, timeout);
-      if (!response.ok) throw new Error(`HH3D page HTTP ${response.status}`);
-      const html = await response.text();
-      if (!/(?:halim-item|halim-episode|info-hero)/i.test(html)) throw new Error('HH3D page không hợp lệ');
-      const finalOrigin = new URL(response.url).origin;
-      originCache = { value: finalOrigin, expiresAt: Date.now() + ORIGIN_TTL_MS };
-      return { html, origin: finalOrigin };
-    } catch (error) {
-      lastError = error;
-      originCache.expiresAt = 0;
+    for (const origin of await originCandidates(force)) {
+      try {
+        const response = await timedFetch(new URL(path, origin), { headers: siteHeaders(origin) }, timeout);
+        if (!response.ok) throw new Error(`HH3D page HTTP ${response.status}`);
+        const html = await response.text();
+        if (!/(?:halim-item|halim-episode|info-hero)/i.test(html)) throw new Error('HH3D page không hợp lệ');
+        const finalOrigin = new URL(response.url).origin;
+        originCache = { value: finalOrigin, expiresAt: Date.now() + ORIGIN_TTL_MS };
+        return { html, origin: finalOrigin };
+      } catch (error) {
+        lastError = error;
+        originCache.expiresAt = 0;
+      }
     }
   }
   throw lastError || new Error('Không tải được trang HH3D');
@@ -183,6 +191,15 @@ async function discoverOrigin(force = false) {
   }
   originCache = { value: FALLBACK_ORIGIN, expiresAt: Date.now() + 10 * 60 * 1000 };
   return FALLBACK_ORIGIN;
+}
+
+async function originCandidates(force = false) {
+  const discovered = await discoverOrigin(force);
+  const candidates = [discovered];
+  for (const mirror of ORIGIN_MIRRORS) {
+    if (!candidates.includes(mirror)) candidates.push(mirror);
+  }
+  return candidates;
 }
 
 function validateSlug(value) {
@@ -586,28 +603,29 @@ export async function resolvePlaylist(slugValue, episodeValue, resolverOrigin = 
   const episode = validateEpisode(episodeValue);
   let lastError;
   for (const force of [false, true]) {
-    const origin = await discoverOrigin(force);
-    try {
-      const postId = await findPostId(origin, slug);
-      const player = await getPlayerData(origin, slug, episode, postId);
-      if (!player?.status) throw new Error('HH3D player không khả dụng');
-      if (player.type === 'embed' && player.embed_url) {
-        const playlist = await resolveEmbedPlaylist(player.embed_url, origin, resolverOrigin);
+    for (const origin of await originCandidates(force)) {
+      try {
+        const postId = await findPostId(origin, slug);
+        const player = await getPlayerData(origin, slug, episode, postId);
+        if (!player?.status) throw new Error('HH3D player không khả dụng');
+        if (player.type === 'embed' && player.embed_url) {
+          const playlist = await resolveEmbedPlaylist(player.embed_url, origin, resolverOrigin);
+          return { playlist, origin, label: player.label || '1080', skipTime: player.skip_time || 0 };
+        }
+        if (player.type !== 'hls' || !allowedPlaylistUrl(player.file)) {
+          throw new Error('HH3D không trả về nguồn phát hợp lệ');
+        }
+        const playlistResponse = await timedFetch(player.file, {
+          headers: { 'User-Agent': UA, Referer: `${origin}/`, Accept: '*/*' },
+        });
+        if (!playlistResponse.ok) throw new Error(`HH3D playlist HTTP ${playlistResponse.status}`);
+        const playlist = absolutizePlaylist(await playlistResponse.text(), player.file, resolverOrigin);
+        if (!playlist.trimStart().startsWith('#EXTM3U')) throw new Error('Dữ liệu nhận được không phải HLS');
         return { playlist, origin, label: player.label || '1080', skipTime: player.skip_time || 0 };
+      } catch (error) {
+        lastError = error;
+        originCache.expiresAt = 0;
       }
-      if (player.type !== 'hls' || !allowedPlaylistUrl(player.file)) {
-        throw new Error('HH3D không trả về nguồn phát hợp lệ');
-      }
-      const playlistResponse = await timedFetch(player.file, {
-        headers: { 'User-Agent': UA, Referer: `${origin}/`, Accept: '*/*' },
-      });
-      if (!playlistResponse.ok) throw new Error(`HH3D playlist HTTP ${playlistResponse.status}`);
-      const playlist = absolutizePlaylist(await playlistResponse.text(), player.file, resolverOrigin);
-      if (!playlist.trimStart().startsWith('#EXTM3U')) throw new Error('Dữ liệu nhận được không phải HLS');
-      return { playlist, origin, label: player.label || '1080', skipTime: player.skip_time || 0 };
-    } catch (error) {
-      lastError = error;
-      originCache.expiresAt = 0;
     }
   }
   throw lastError || new Error('Không lấy được nguồn HH3D');
